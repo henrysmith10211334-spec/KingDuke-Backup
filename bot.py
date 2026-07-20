@@ -233,8 +233,9 @@ async def speedups(interaction: discord.Interaction, image: discord.Attachment):
             print(f"📍 Sheet UPDATE landed at: {result.get('updatedRange')}")
             await interaction.followup.send(embed=make_embed("⚠️ Updated previous report.", discord.Color.yellow()), ephemeral=True)
         else:
-            result = speedups_sheet.append_row(["", display_name, healing, universal])
-            print(f"📍 Sheet APPEND landed at: {result['updates']['updatedRange']}")
+            next_row = len(speedups_sheet.col_values(2)) + 1
+            result = speedups_sheet.update(f"B{next_row}:D{next_row}", [[display_name, healing, universal]])
+            print(f"📍 Sheet APPEND landed at: {result.get('updatedRange')}")
             await interaction.followup.send(embed=make_embed("✅ Report submitted!", discord.Color.green()), ephemeral=True)
     except Exception as e:
         print("❌ Sheet write failed:", repr(e))
