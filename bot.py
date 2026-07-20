@@ -1,6 +1,5 @@
 import discord
 from discord import app_commands
-import aiohttp
 import gspread
 from google.oauth2.service_account import Credentials
 import json
@@ -49,74 +48,75 @@ tree   = app_commands.CommandTree(client)
 sleeping = False
 
 # ───────────────────────────────────────────────────────────────
-# QWEN VISION OCR FUNCTION (BEST PLAIN OCR + FALLBACK + LOGGING)
+# QWEN VISION OCR (URL-based, correct SDK format, with logging)
 # ───────────────────────────────────────────────────────────────
-async def qwen_ocr(image_url: str) -> str:
+async def qwen_ocr(image_url: str) -> str | None:
     try:
-        # Download image bytes
-        async with aiohttp.ClientSession() as session:
-            async with session.get(image_url) as resp:
-                img_bytes = await resp.read()
-
-        # Primary OCR model: Qwen Vision
+        # Primary: Qwen Vision
         try:
-            response = groq_client.chat.completions.create(
+            completion = groq_client.chat.completions.create(
                 model="qwen/qwen3.6-27b",
                 messages=[
                     {
                         "role": "user",
                         "content": [
-                            {"type": "text", "text": "Extract all visible text from this image. Return ONLY plain text."},
-                            {"type": "image_url", "image_url": "attachment://image"}
+                            {
+                                "type": "text",
+                                "text": "Extract all visible text from this image. Return ONLY plain text."
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": image_url
+                                }
+                            }
                         ]
                     }
                 ],
-                attachments=[
-                    {
-                        "name": "image",
-                        "mime_type": "image/png",
-                        "data": img_bytes
-                    }
-                ]
+                temperature=0,
+                max_completion_tokens=512
             )
 
             print("🟢 Qwen OCR succeeded")
-            return response.choices[0].message.content
+            return completion.choices[0].message.content
 
         except Exception as e:
-            print("⚠️ Qwen OCR failed:", e)
+            print("⚠️ Qwen OCR failed:", repr(e))
 
-            # Fallback model: Scout
+            # Fallback: Scout
             try:
-                response = groq_client.chat.completions.create(
+                completion = groq_client.chat.completions.create(
                     model="meta-llama/llama-4-scout-17b-16e-instruct",
                     messages=[
                         {
                             "role": "user",
                             "content": [
-                                {"type": "text", "text": "Extract all visible text from this image. Return ONLY plain text."},
-                                {"type": "image_url", "image_url": "attachment://image"}
+                                {
+                                    "type": "text",
+                                    "text": "Extract all visible text from this image. Return ONLY plain text."
+                                },
+                                {
+                                    "type": "image_url",
+                                    "image_url": {
+                                        "url": image_url
+                                    }
+                                }
                             ]
                         }
                     ],
-                    attachments=[
-                        {
-                            "name": "image",
-                            "mime_type": "image/png",
-                            "data": img_bytes
-                        }
-                    ]
+                    temperature=0,
+                    max_completion_tokens=512
                 )
 
                 print("🟡 Fallback OCR succeeded using Scout")
-                return response.choices[0].message.content
+                return completion.choices[0].message.content
 
             except Exception as e2:
-                print("❌ Scout fallback also failed:", e2)
+                print("❌ Scout fallback also failed:", repr(e2))
                 return None
 
     except Exception as outer:
-        print("❌ OCR outer failure:", outer)
+        print("❌ OCR outer failure:", repr(outer))
         return None
 
 # ───────────────────────────────────────────────────────────────
@@ -232,7 +232,8 @@ async def speedups(interaction: discord.Interaction, image: discord.Attachment):
         else:
             speedups_sheet.append_row(["", display_name, healing, universal])
             await interaction.followup.send(embed=make_embed("✅ Report submitted!", discord.Color.green()), ephemeral=True)
-    except Exception:
+    except Exception as e:
+        print("❌ Speedups sheet write failed:", repr(e))
         await interaction.followup.send(embed=make_embed("❌ Sheet write failed.", discord.Color.red()), ephemeral=True)
 
 # ───────────────────────────────────────────────────────────────
@@ -253,7 +254,7 @@ async def resources(interaction: discord.Interaction, image: discord.Attachment)
 
     if interaction.channel_id != REPORT_CHANNEL_ID:
         await interaction.response.send_message(
-            embed=makemake_embed(f"❌ Use this only in <#{REPORT_CHANNEL_ID}>.", discord.Color.red()),
+            embed=make_embed(f"❌ Use this only in <#{REPORT_CHANNEL_ID}>.", discord.Color.red()),
             ephemeral=True
         )
         return
@@ -292,7 +293,8 @@ async def resources(interaction: discord.Interaction, image: discord.Attachment)
         else:
             resources_sheet.append_row(["", display_name, food, wood, stone, gold])
             await interaction.followup.send(embed=make_embed("✅ Report submitted!", discord.Color.green()), ephemeral=True)
-    except Exception:
+    except Exception as e:
+        print("❌ Resources sheet write failed:", repr(e))
         await interaction.followup.send(embed=make_embed("❌ Sheet write failed.", discord.Color.red()), ephemeral=True)
 
 # ───────────────────────────────────────────────────────────────
