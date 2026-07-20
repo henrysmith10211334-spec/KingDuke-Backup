@@ -5,5 +5,5 @@ google-auth
 google-auth-oauthlib
 google-auth-httplib2
 google-api-python-client
-google.genai
+google-genai==0.3.0
 
