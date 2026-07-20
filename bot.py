@@ -68,6 +68,7 @@ def get_sheet_from_category(category: str):
     else:
         raise ValueError("Invalid category")
 
+# ── FIXED OCR FUNCTION (THIS WAS THE ONLY BROKEN PART) ───────────────────────
 async def groq_read_image(image_url: str, prompt: str) -> str:
     payload = {
         "model": "meta-llama/llama-4-scout-17b-16e-instruct",
@@ -85,13 +86,23 @@ async def groq_read_image(image_url: str, prompt: str) -> str:
         "Authorization": f"Bearer {GROQ_API_KEY}",
         "Content-Type": "application/json",
     }
+
     async with aiohttp.ClientSession() as session:
         async with session.post(
             "https://api.groq.com/openai/v1/chat/completions",
             json=payload,
             headers=headers,
         ) as resp:
+
             data = await resp.json()
+
+            # 🔥 FIX: Handle Groq OCR errors safely
+            if "error" in data:
+                raise Exception(f"OCR Error: {data['error'].get('message', 'Unknown error')}")
+
+            if "choices" not in data or len(data["choices"]) == 0:
+                raise Exception("OCR Error: No choices returned")
+
             return data["choices"][0]["message"]["content"]
 
 async def groq_extract_generic(image_url: str, prompt: str) -> str:
@@ -225,9 +236,8 @@ async def resources(interaction: discord.Interaction, image: discord.Attachment)
     try:
         raw = await groq_read_image(
             image.url,
-            "From this ROK screenshot extract the total amounts of Food, Wood, Stone and Gold. "
-            "Reply ONLY in this exact format with nothing else: "
-            "FOOD:X WOOD:X STONE:X GOLD:X"
+            "Extract FOOD, WOOD, STONE, GOLD from this ROK resources screenshot. "
+            "Reply ONLY in this exact format: FOOD:X WOOD:X STONE:X GOLD:X"
         )
     except Exception:
         await interaction.followup.send(embed=make_embed("❌ Failed to send report, please try again or report to bot owner.", discord.Color.red()), ephemeral=True)
@@ -239,7 +249,7 @@ async def resources(interaction: discord.Interaction, image: discord.Attachment)
         stone = raw.split("STONE:")[1].split("GOLD:")[0].strip()
         gold  = raw.split("GOLD:")[1].strip()
     except Exception:
-        await interaction.followup.send(embed=make_embed("❌ Failed to send report, please try again or report to bot owner.", discord.Color.red()), ephemeral=True)
+        await interaction.followup.send(embed=make_embed("❌ Failed to parse OCR output.", discord.Color.red()), ephemeral=True)
         return
 
     display_name = strip_fancy(interaction.user.display_name) or interaction.user.name
@@ -279,22 +289,20 @@ async def addreport(interaction: discord.Interaction, category: app_commands.Cho
 
     if category.value == "speedups":
         prompt = (
-            "From this ROK screenshot extract Healing and Universal speedup times. "
-            "Reply ONLY in this exact format with nothing else: "
-            "HEALING:Xd Xh Xm UNIVERSAL:Xd Xh Xm"
+            "Extract Healing and Universal speedup times. "
+            "Reply ONLY: HEALING:Xd Xh Xm UNIVERSAL:Xd Xh Xm"
         )
     else:
         prompt = (
-            "From this ROK screenshot extract the total amounts of Food, Wood, Stone and Gold. "
-            "Reply ONLY in this exact format with nothing else: "
-            "FOOD:X WOOD:X STONE:X GOLD:X"
+            "Extract FOOD, WOOD, STONE, GOLD. "
+            "Reply ONLY: FOOD:X WOOD:X STONE:X GOLD:X"
         )
 
     try:
-        raw = await groq_extract_generic(image.url, prompt)
+        raw = await groq_read_image(image.url, prompt)
     except Exception:
         await interaction.followup.send(
-            embed=make_embed("❌ OCR failed. Try again.", discord.Color.red()),
+            embed=make_embed("❌ OCR failed.", discord.Color.red()),
             ephemeral=True
         )
         return
@@ -401,4 +409,3 @@ async def on_ready():
     print(f"Logged in as {client.user}")
 
 client.run(DISCORD_TOKEN)
-
