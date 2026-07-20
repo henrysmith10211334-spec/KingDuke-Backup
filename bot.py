@@ -25,7 +25,7 @@ REPORT_CHANNEL_ID = config.get("report_channel_id")
 
 # ── CONFIG ──────────────────────────────────────────────────────────────────
 DISCORD_TOKEN   = os.environ.get("DISCORD_TOKEN") or os.environ.get("TOKEN")
-OPENAI_API_KEY  = os.environ.get("OPENAI_API_KEY")
+OCRSPACE_API_KEY = os.environ.get("OCRSPACE_API_KEY")
 SPREADSHEET_ID  = os.environ.get("SPREADSHEET_ID")
 OWNER_IDS       = {1364018193580163194, 805304956633481260}
 
@@ -68,43 +68,27 @@ def get_sheet_from_category(category: str):
     else:
         raise ValueError("Invalid category")
 
-# ── FINAL OPENAI OCR FUNCTION ───────────────────────────────────────────────
-async def openai_read_image(image_url: str, prompt: str) -> str:
-    url = "https://api.openai.com/v1/responses"
+# ── OCRSPACE OCR FUNCTION ────────────────────────────────────────────────────
+async def ocrspace_read_image(image_url: str) -> str:
+    url = "https://api.ocr.space/parse/image"
 
     payload = {
-        "model": "gpt-4o-mini",
-        "input": [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "input_text",
-                        "text": prompt
-                    },
-                    {
-                        "type": "input_image",
-                        "image_url": image_url
-                    }
-                ]
-            }
-        ]
-    }
-
-    headers = {
-        "Authorization": f"Bearer {OPENAI_API_KEY}",
-        "Content-Type": "application/json",
+        "apikey": OCRSPACE_API_KEY,
+        "url": image_url,
+        "OCREngine": 2,
+        "scale": True,
+        "isTable": False
     }
 
     async with aiohttp.ClientSession() as session:
-        async with session.post(url, json=payload, headers=headers) as resp:
+        async with session.post(url, data=payload) as resp:
             data = await resp.json()
-            print("OPENAI RAW:", data)
+            print("OCRSPACE RAW:", data)
 
-            if "error" in data:
-                raise Exception(f"OCR Error: {data['error']['message']}")
+            if data.get("IsErroredOnProcessing"):
+                raise Exception(data.get("ErrorMessage", "Unknown OCR error"))
 
-            return data["output_text"]
+            return data["ParsedResults"][0]["ParsedText"]
 
 # ── PREFIX COMMANDS ──────────────────────────────────────────────────────────
 @client.event
@@ -171,20 +155,16 @@ async def speedups(interaction: discord.Interaction, image: discord.Attachment):
     await interaction.response.defer(ephemeral=True)
 
     try:
-        raw = await openai_read_image(
-            image.url,
-            "From this ROK screenshot extract Healing and Universal speedup times. Reply ONLY: HEALING:Xd Xh Xm UNIVERSAL:Xd Xh Xm"
-        )
+        raw = await ocrspace_read_image(image.url)
     except Exception:
         await interaction.followup.send(embed=make_embed("❌ OCR failed.", discord.Color.red()), ephemeral=True)
         return
 
-    try:
-        healing   = raw.split("UNIVERSAL:")[0].replace("HEALING:", "").strip()
-        universal = raw.split("UNIVERSAL:")[1].strip()
-    except Exception:
-        await interaction.followup.send(embed=make_embed("❌ Failed to parse OCR.", discord.Color.red()), ephemeral=True)
-        return
+    healing_match   = re.search(r"Healing[: ]+([0-9dhm ]+)", raw, re.I)
+    universal_match = re.search(r"Universal[: ]+([0-9dhm ]+)", raw, re.I)
+
+    healing   = healing_match.group(1).strip() if healing_match else "0"
+    universal = universal_match.group(1).strip() if universal_match else "0"
 
     display_name = strip_fancy(interaction.user.display_name) or interaction.user.name
 
@@ -230,22 +210,20 @@ async def resources(interaction: discord.Interaction, image: discord.Attachment)
     await interaction.response.defer(ephemeral=True)
 
     try:
-        raw = await openai_read_image(
-            image.url,
-            "Extract FOOD, WOOD, STONE, GOLD. Reply ONLY: FOOD:X WOOD:X STONE:X GOLD:X"
-        )
+        raw = await ocrspace_read_image(image.url)
     except Exception:
         await interaction.followup.send(embed=make_embed("❌ OCR failed.", discord.Color.red()), ephemeral=True)
         return
 
-    try:
-        food  = raw.split("WOOD:")[0].replace("FOOD:", "").strip()
-        wood  = raw.split("WOOD:")[1].split("STONE:")[0].strip()
-        stone = raw.split("STONE:")[1].split("GOLD:")[0].strip()
-        gold  = raw.split("GOLD:")[1].strip()
-    except Exception:
-        await interaction.followup.send(embed=make_embed("❌ Failed to parse OCR.", discord.Color.red()), ephemeral=True)
-        return
+    food_match  = re.search(r"Food[: ]+([0-9,\.]+)", raw, re.I)
+    wood_match  = re.search(r"Wood[: ]+([0-9,\.]+)", raw, re.I)
+    stone_match = re.search(r"Stone[: ]+([0-9,\.]+)", raw, re.I)
+    gold_match  = re.search(r"Gold[: ]+([0-9,\.]+)", raw, re.I)
+
+    food  = food_match.group(1).strip() if food_match else "0"
+    wood  = wood_match.group(1).strip() if wood_match else "0"
+    stone = stone_match.group(1).strip() if stone_match else "0"
+    gold  = gold_match.group(1).strip() if gold_match else "0"
 
     display_name = strip_fancy(interaction.user.display_name) or interaction.user.name
 
@@ -282,17 +260,8 @@ async def addreport(interaction: discord.Interaction, category: app_commands.Cho
 
     await interaction.response.defer(ephemeral=True)
 
-    if category.value == "speedups":
-        prompt = (
-            "Extract Healing and Universal speedup times. Reply ONLY: HEALING:Xd Xh Xm UNIVERSAL:Xd Xh Xm"
-        )
-    else:
-        prompt = (
-            "Extract FOOD, WOOD, STONE, GOLD. Reply ONLY: FOOD:X WOOD:X STONE:X GOLD:X"
-        )
-
     try:
-        raw = await openai_read_image(image.url, prompt)
+        raw = await ocrspace_read_image(image.url)
     except Exception:
         await interaction.followup.send(
             embed=make_embed("❌ OCR failed.", discord.Color.red()),
@@ -300,23 +269,26 @@ async def addreport(interaction: discord.Interaction, category: app_commands.Cho
         )
         return
 
-    try:
-        if category.value == "speedups":
-            healing   = raw.split("UNIVERSAL:")[0].replace("HEALING:", "").strip()
-            universal = raw.split("UNIVERSAL:")[1].strip()
-            parsed = [healing, universal]
-        else:
-            food  = raw.split("WOOD:")[0].replace("FOOD:", "").strip()
-            wood  = raw.split("WOOD:")[1].split("STONE:")[0].strip()
-            stone = raw.split("STONE:")[1].split("GOLD:")[0].strip()
-            gold  = raw.split("GOLD:")[1].strip()
-            parsed = [food, wood, stone, gold]
-    except Exception:
-        await interaction.followup.send(
-            embed=make_embed("❌ Failed to parse OCR output.", discord.Color.red()),
-            ephemeral=True
-        )
-        return
+    if category.value == "speedups":
+        healing_match   = re.search(r"Healing[: ]+([0-9dhm ]+)", raw, re.I)
+        universal_match = re.search(r"Universal[: ]+([0-9dhm ]+)", raw, re.I)
+
+        healing   = healing_match.group(1).strip() if healing_match else "0"
+        universal = universal_match.group(1).strip() if universal_match else "0"
+
+        parsed = [healing, universal]
+    else:
+        food_match  = re.search(r"Food[: ]+([0-9,\.]+)", raw, re.I)
+        wood_match  = re.search(r"Wood[: ]+([0-9,\.]+)", raw, re.I)
+        stone_match = re.search(r"Stone[: ]+([0-9,\.]+)", raw, re.I)
+        gold_match  = re.search(r"Gold[: ]+([0-9,\.]+)", raw, re.I)
+
+        food  = food_match.group(1).strip() if food_match else "0"
+        wood  = wood_match.group(1).strip() if wood_match else "0"
+        stone = stone_match.group(1).strip() if stone_match else "0"
+        gold  = gold_match.group(1).strip() if gold_match else "0"
+
+        parsed = [food, wood, stone, gold]
 
     sheet = get_sheet_from_category(category.value)
     display_name = strip_fancy(user.display_name) or user.name
