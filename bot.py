@@ -24,7 +24,7 @@ config = load_config()
 REPORT_CHANNEL_ID = config.get("report_channel_id")
 
 # ── CONFIG ──────────────────────────────────────────────────────────────────
-DISCORD_TOKEN   = os.environ.get("DISCORD_TOKEN")
+DISCORD_TOKEN   = os.environ.get("DISCORD_TOKEN") or os.environ.get("TOKEN")
 GROQ_API_KEY    = os.environ.get("GROQ_API_KEY")
 SPREADSHEET_ID  = os.environ.get("SPREADSHEET_ID")
 OWNER_IDS       = {1364018193580163194, 805304956633481260}
@@ -68,20 +68,27 @@ def get_sheet_from_category(category: str):
     else:
         raise ValueError("Invalid category")
 
-# ── FIXED OCR FUNCTION (THIS WAS THE ONLY BROKEN PART) ───────────────────────
+# ── FIXED OCR FUNCTION ───────────────────────────────────────────────────────
 async def groq_read_image(image_url: str, prompt: str) -> str:
     payload = {
-        "model": "meta-llama/llama-4-scout-17b-16e-instruct",
+        "model": "llama-3.1-70b-versatile",
         "messages": [
             {
                 "role": "user",
                 "content": [
-                    {"type": "image_url", "image_url": {"url": image_url}},
-                    {"type": "text", "text": prompt},
-                ],
+                    {
+                        "type": "input_text",
+                        "text": prompt
+                    },
+                    {
+                        "type": "input_image",
+                        "image_url": image_url
+                    }
+                ]
             }
-        ],
+        ]
     }
+
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY}",
         "Content-Type": "application/json",
@@ -96,12 +103,8 @@ async def groq_read_image(image_url: str, prompt: str) -> str:
 
             data = await resp.json()
 
-            # 🔥 FIX: Handle Groq OCR errors safely
             if "error" in data:
                 raise Exception(f"OCR Error: {data['error'].get('message', 'Unknown error')}")
-
-            if "choices" not in data or len(data["choices"]) == 0:
-                raise Exception("OCR Error: No choices returned")
 
             return data["choices"][0]["message"]["content"]
 
