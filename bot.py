@@ -1,3 +1,4 @@
+import asyncio
 import discord
 from discord import app_commands
 import gspread
@@ -86,23 +87,36 @@ async def gemini_ocr(image: discord.Attachment):
         If a value is missing, set it to "0".
         """
  
-        response = gemini.models.generate_content(
-            model="gemini-3.5-flash",
-            contents=[
-                {
-                    "role": "user",
-                    "parts": [
-                        {"text": prompt},
+        response = None
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                response = gemini.models.generate_content(
+                    model="gemini-3.5-flash",
+                    contents=[
                         {
-                            "inline_data": {
-                                "mime_type": image.content_type,
-                                "data": img_bytes,
-                            }
-                        },
+                            "role": "user",
+                            "parts": [
+                                {"text": prompt},
+                                {
+                                    "inline_data": {
+                                        "mime_type": image.content_type,
+                                        "data": img_bytes,
+                                    }
+                                },
+                            ],
+                        }
                     ],
-                }
-            ],
-        )
+                )
+                break
+            except Exception as e:
+                overloaded = "503" in str(e) or "UNAVAILABLE" in str(e)
+                if overloaded and attempt < max_retries - 1:
+                    wait = 2 ** attempt  # 1s, 2s, 4s
+                    print(f"⏳ Gemini overloaded, retrying in {wait}s (attempt {attempt + 1}/{max_retries})")
+                    await asyncio.sleep(wait)
+                    continue
+                raise
  
         # Extract text from response
         parts = response.candidates[0].content.parts
