@@ -49,36 +49,75 @@ tree   = app_commands.CommandTree(client)
 sleeping = False
 
 # ───────────────────────────────────────────────────────────────
-# QWEN VISION OCR FUNCTION (BEST POSSIBLE OCR)
+# QWEN VISION OCR FUNCTION (BEST PLAIN OCR + FALLBACK + LOGGING)
 # ───────────────────────────────────────────────────────────────
 async def qwen_ocr(image_url: str) -> str:
-    # Download image bytes
-    async with aiohttp.ClientSession() as session:
-        async with session.get(image_url) as resp:
-            img_bytes = await resp.read()
+    try:
+        # Download image bytes
+        async with aiohttp.ClientSession() as session:
+            async with session.get(image_url) as resp:
+                img_bytes = await resp.read()
 
-    # Send to Groq Qwen Vision
-    response = groq_client.chat.completions.create(
-        model="qwen/qwen3.6-27b",
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {"type": "input_text", "text": "Extract ALL text from this image. Return ONLY plain text."},
-                    {"type": "input_image", "image_url": "attachment://image"}
+        # Primary OCR model: Qwen Vision
+        try:
+            response = groq_client.chat.completions.create(
+                model="qwen/qwen3.6-27b",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "Extract all visible text from this image. Return ONLY plain text."},
+                            {"type": "image_url", "image_url": "attachment://image"}
+                        ]
+                    }
+                ],
+                attachments=[
+                    {
+                        "name": "image",
+                        "mime_type": "image/png",
+                        "data": img_bytes
+                    }
                 ]
-            }
-        ],
-        attachments=[
-            {
-                "name": "image",
-                "mime_type": "image/png",
-                "data": img_bytes
-            }
-        ]
-    )
+            )
 
-    return response.choices[0].message.content
+            print("🟢 Qwen OCR succeeded")
+            return response.choices[0].message.content
+
+        except Exception as e:
+            print("⚠️ Qwen OCR failed:", e)
+
+            # Fallback model: Scout
+            try:
+                response = groq_client.chat.completions.create(
+                    model="meta-llama/llama-4-scout-17b-16e-instruct",
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": "Extract all visible text from this image. Return ONLY plain text."},
+                                {"type": "image_url", "image_url": "attachment://image"}
+                            ]
+                        }
+                    ],
+                    attachments=[
+                        {
+                            "name": "image",
+                            "mime_type": "image/png",
+                            "data": img_bytes
+                        }
+                    ]
+                )
+
+                print("🟡 Fallback OCR succeeded using Scout")
+                return response.choices[0].message.content
+
+            except Exception as e2:
+                print("❌ Scout fallback also failed:", e2)
+                return None
+
+    except Exception as outer:
+        print("❌ OCR outer failure:", outer)
+        return None
 
 # ───────────────────────────────────────────────────────────────
 # HELPERS
@@ -172,9 +211,8 @@ async def speedups(interaction: discord.Interaction, image: discord.Attachment):
 
     await interaction.response.defer(ephemeral=True)
 
-    try:
-        raw = await qwen_ocr(image.url)
-    except Exception:
+    raw = await qwen_ocr(image.url)
+    if raw is None:
         await interaction.followup.send(embed=make_embed("❌ OCR failed.", discord.Color.red()), ephemeral=True)
         return
 
@@ -215,7 +253,7 @@ async def resources(interaction: discord.Interaction, image: discord.Attachment)
 
     if interaction.channel_id != REPORT_CHANNEL_ID:
         await interaction.response.send_message(
-            embed=make_embed(f"❌ Use this only in <#{REPORT_CHANNEL_ID}>.", discord.Color.red()),
+            embed=makemake_embed(f"❌ Use this only in <#{REPORT_CHANNEL_ID}>.", discord.Color.red()),
             ephemeral=True
         )
         return
@@ -229,9 +267,8 @@ async def resources(interaction: discord.Interaction, image: discord.Attachment)
 
     await interaction.response.defer(ephemeral=True)
 
-    try:
-        raw = await qwen_ocr(image.url)
-    except Exception:
+    raw = await qwen_ocr(image.url)
+    if raw is None:
         await interaction.followup.send(embed=make_embed("❌ OCR failed.", discord.Color.red()), ephemeral=True)
         return
 
