@@ -34,7 +34,6 @@ creds       = Credentials.from_service_account_info(SERVICE_ACCOUNT_INFO, scopes
 gc          = gspread.authorize(creds)
 spreadsheet = gc.open_by_key(SPREADSHEET_ID)
 speedups_sheet  = spreadsheet.worksheet("Speedups")
-resources_sheet = spreadsheet.worksheet("Resources")
 
 # Groq client
 groq_client = Groq(api_key=os.environ["GROQ_API_KEY"])
@@ -63,10 +62,15 @@ async def qwen_ocr(image_url: str) -> str | None:
                             {
                                 "type": "text",
                                 "text": (
-                                    "Perform OCR on this image. Extract ALL text exactly as it appears, "
-                                    "including numbers, labels, timers, and resource values. "
-                                    "Do NOT summarize. Do NOT describe the image. "
-                                    "Return ONLY the raw text you detect."
+                                    "Perform OCR on this image.\n"
+                                    "Return ONLY the raw text exactly as it appears.\n"
+                                    "Do NOT explain.\n"
+                                    "Do NOT describe.\n"
+                                    "Do NOT list.\n"
+                                    "Do NOT think.\n"
+                                    "Do NOT summarize.\n"
+                                    "Do NOT add formatting.\n"
+                                    "If you cannot detect text, return an empty string."
                                 )
                             },
                             {
@@ -81,7 +85,7 @@ async def qwen_ocr(image_url: str) -> str | None:
             )
 
             print("🟢 Qwen OCR succeeded")
-            return completion.choices[0].message.content
+            return completion.choices[0].message.content.strip()
 
         except Exception as e:
             print("⚠️ Qwen OCR failed:", repr(e))
@@ -97,9 +101,12 @@ async def qwen_ocr(image_url: str) -> str | None:
                                 {
                                     "type": "text",
                                     "text": (
-                                        "Perform OCR on this image. Extract ALL text exactly as it appears, "
-                                        "including numbers, labels, timers, and resource values. "
-                                        "Return ONLY raw text."
+                                        "Perform OCR on this image.\n"
+                                        "Return ONLY raw text.\n"
+                                        "Do NOT explain.\n"
+                                        "Do NOT describe.\n"
+                                        "Do NOT list.\n"
+                                        "Do NOT think."
                                     )
                                 },
                                 {
@@ -114,7 +121,7 @@ async def qwen_ocr(image_url: str) -> str | None:
                 )
 
                 print("🟡 Fallback OCR succeeded using Scout")
-                return completion.choices[0].message.content
+                return completion.choices[0].message.content.strip()
 
             except Exception as e2:
                 print("❌ Scout fallback also failed:", repr(e2))
@@ -177,7 +184,7 @@ async def on_message(message):
             await message.channel.send(embed=make_embed("❌ You don't have permission.", discord.Color.red()))
 
 # ───────────────────────────────────────────────────────────────
-# SPEEDUPS COMMAND
+# SPEEDUPS COMMAND (Healing + Universal only)
 # ───────────────────────────────────────────────────────────────
 @tree.command(name="speedups", description="Submit your ROK speedups screenshot")
 @app_commands.describe(image="Your ROK speedups screenshot")
@@ -211,12 +218,12 @@ async def speedups(interaction: discord.Interaction, image: discord.Attachment):
     raw = await qwen_ocr(image.url)
     print("🔍 OCR RAW OUTPUT:", raw)
 
-    if raw is None:
+    if not raw:
         await interaction.followup.send(embed=make_embed("❌ OCR failed.", discord.Color.red()), ephemeral=True)
         return
 
-    healing_match   = re.search(r"Healing[: ]+([0-9dhm ]+)", raw, re.I)
-    universal_match = re.search(r"Universal[: ]+([0-9dhm ]+)", raw, re.I)
+    healing_match   = re.search(r"Healing Speedup\s+([0-9dhm ,]+)", raw, re.I)
+    universal_match = re.search(r"Speedup\s+([0-9dhm ,]+)", raw, re.I)
 
     healing   = healing_match.group(1).strip() if healing_match else "0"
     universal = universal_match.group(1).strip() if universal_match else "0"
@@ -232,76 +239,13 @@ async def speedups(interaction: discord.Interaction, image: discord.Attachment):
             speedups_sheet.append_row(["", display_name, healing, universal])
             await interaction.followup.send(embed=make_embed("✅ Report submitted!", discord.Color.green()), ephemeral=True)
     except Exception as e:
-        print("❌ Speedups sheet write failed:", repr(e))
-        await interaction.followup.send(embed=make_embed("❌ Sheet write failed.", discord.Color.red()), ephemeral=True)
-
-# ───────────────────────────────────────────────────────────────
-# RESOURCES COMMAND
-# ───────────────────────────────────────────────────────────────
-@tree.command(name="rss", description="Submit your ROK rss screenshot")
-@app_commands.describe(image="Your ROK resources screenshot")
-async def resources(interaction: discord.Interaction, image: discord.Attachment):
-    global sleeping
-    global REPORT_CHANNEL_ID
-
-    if REPORT_CHANNEL_ID is None:
-        await interaction.response.send_message(
-            embed=make_embed("⚠️ Report channel not set.", discord.Color.yellow()),
-            ephemeral=True
-        )
-        return
-
-    if interaction.channel_id != REPORT_CHANNEL_ID:
-        await interaction.response.send_message(
-            embed=make_embed(f"❌ Use this only in <#{REPORT_CHANNEL_ID}>.", discord.Color.red()),
-            ephemeral=True
-        )
-        return
-
-    if sleeping:
-        await interaction.response.send_message(
-            embed=make_embed("❌ Bot under maintenance.", discord.Color.red()),
-            ephemeral=True
-        )
-        return
-
-    await interaction.response.defer(ephemeral=True)
-
-    raw = await qwen_ocr(image.url)
-    print("🔍 OCR RAW OUTPUT:", raw)
-
-    if raw is None:
-        await interaction.followup.send(embed=make_embed("❌ OCR failed.", discord.Color.red()), ephemeral=True)
-        return
-
-    food_match  = re.search(r"Food[: ]+([0-9,\.]+)", raw, re.I)
-    wood_match  = re.search(r"Wood[: ]+([0-9,\.]+)", raw, re.I)
-    stone_match = re.search(r"Stone[: ]+([0-9,\.]+)", raw, re.I)
-    gold_match  = re.search(r"Gold[: ]+([0-9,\.]+)", raw, re.I)
-
-    food  = food_match.group(1).strip() if food_match else "0"
-    wood  = wood_match.group(1).strip() if wood_match else "0"
-    stone = stone_match.group(1).strip() if stone_match else "0"
-    gold  = gold_match.group(1).strip() if gold_match else "0"
-
-    display_name = strip_fancy(interaction.user.display_name) or interaction.user.name
-
-    try:
-        existing_row = find_row(resources_sheet, display_name)
-        if existing_row > -1:
-            resources_sheet.update(f"B{existing_row}:F{existing_row}", [[display_name, food, wood, stone, gold]])
-            await interaction.followup.send(embed=make_embed("⚠️ Updated previous report.", discord.Color.yellow()), ephemeral=True)
-        else:
-            resources_sheet.append_row(["", display_name, food, wood, stone, gold])
-            await interaction.followup.send(embed=make_embed("✅ Report submitted!", discord.Color.green()), ephemeral=True)
-    except Exception as e:
-        print("❌ Resources sheet write failed:", repr(e))
+        print("❌ Sheet write failed:", repr(e))
         await interaction.followup.send(embed=make_embed("❌ Sheet write failed.", discord.Color.red()), ephemeral=True)
 
 # ───────────────────────────────────────────────────────────────
 # SET REPORT CHANNEL
 # ───────────────────────────────────────────────────────────────
-@tree.command(name="setreportchannel", description="Set the channel where /speedups and /rss are allowed")
+@tree.command(name="setreportchannel", description="Set the channel where /speedups is allowed")
 @app_commands.describe(channel="Channel to allow reports in")
 async def setreportchannel(interaction: discord.Interaction, channel: discord.TextChannel):
     global REPORT_CHANNEL_ID, config
