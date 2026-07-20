@@ -6,6 +6,7 @@ from google.oauth2.service_account import Credentials
 import json
 import os
 import re
+import base64
 
 CONFIG_FILE = "config.json"
 
@@ -68,8 +69,16 @@ def get_sheet_from_category(category: str):
     else:
         raise ValueError("Invalid category")
 
-# ── FIXED OCR FUNCTION ───────────────────────────────────────────────────────
+# ── FIXED OCR FUNCTION + DEBUG PRINT ─────────────────────────────────────────
 async def groq_read_image(image_url: str, prompt: str) -> str:
+    # Download image bytes
+    async with aiohttp.ClientSession() as session:
+        async with session.get(image_url) as img_resp:
+            img_bytes = await img_resp.read()
+
+    # Convert to base64
+    img_b64 = base64.b64encode(img_bytes).decode("utf-8")
+
     payload = {
         "model": "llama-3.1-70b-versatile",
         "messages": [
@@ -82,7 +91,7 @@ async def groq_read_image(image_url: str, prompt: str) -> str:
                     },
                     {
                         "type": "input_image",
-                        "image_url": image_url
+                        "image": img_b64
                     }
                 ]
             }
@@ -102,6 +111,9 @@ async def groq_read_image(image_url: str, prompt: str) -> str:
         ) as resp:
 
             data = await resp.json()
+
+            # ⭐ DEBUG PRINT — THIS SHOWS IN RAILWAY LOGS
+            print("GROQ RAW:", data)
 
             if "error" in data:
                 raise Exception(f"OCR Error: {data['error'].get('message', 'Unknown error')}")
@@ -179,8 +191,7 @@ async def speedups(interaction: discord.Interaction, image: discord.Attachment):
         raw = await groq_read_image(
             image.url,
             "From this ROK screenshot extract Healing and Universal speedup times. "
-            "Reply ONLY in this exact format with nothing else: "
-            "HEALING:Xd Xh Xm UNIVERSAL:Xd Xh Xm"
+            "Reply ONLY: HEALING:Xd Xh Xm UNIVERSAL:Xd Xh Xm"
         )
     except Exception:
         await interaction.followup.send(embed=make_embed("❌ Failed to send report, please try again or report to bot owner.", discord.Color.red()), ephemeral=True)
@@ -239,8 +250,7 @@ async def resources(interaction: discord.Interaction, image: discord.Attachment)
     try:
         raw = await groq_read_image(
             image.url,
-            "Extract FOOD, WOOD, STONE, GOLD from this ROK resources screenshot. "
-            "Reply ONLY in this exact format: FOOD:X WOOD:X STONE:X GOLD:X"
+            "Extract FOOD, WOOD, STONE, GOLD. Reply ONLY: FOOD:X WOOD:X STONE:X GOLD:X"
         )
     except Exception:
         await interaction.followup.send(embed=make_embed("❌ Failed to send report, please try again or report to bot owner.", discord.Color.red()), ephemeral=True)
