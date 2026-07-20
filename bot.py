@@ -47,12 +47,12 @@ tree   = app_commands.CommandTree(client)
 sleeping = False
 
 # ───────────────────────────────────────────────────────────────
-# QWEN OCR — ONLY extract Healing + Universal
+# JSON OCR — ONLY Healing + Universal (Scout)
 # ───────────────────────────────────────────────────────────────
-async def qwen_ocr(image_url: str) -> tuple[str, str] | None:
+async def scout_ocr(image_url: str):
     try:
         completion = groq_client.chat.completions.create(
-            model="qwen/qwen3.6-27b",
+            model="meta-llama/llama-4-scout-17b-16e-instruct",
             messages=[
                 {
                     "role": "user",
@@ -60,16 +60,20 @@ async def qwen_ocr(image_url: str) -> tuple[str, str] | None:
                         {
                             "type": "text",
                             "text": (
-                                "Extract ONLY the following two values from this image:\n\n"
-                                "1. Healing Speedup — return ONLY the duration number (example: 11d 4h 40m)\n"
-                                "2. Universal Speedup — return ONLY the duration number (example: 3,476d 17h 56m)\n\n"
-                                "Do NOT extract any other text.\n"
-                                "Do NOT describe the image.\n"
-                                "Do NOT list anything.\n"
-                                "Do NOT think.\n"
-                                "Do NOT summarize.\n"
-                                "Return ONLY the two raw values, each on its own line.\n"
-                                "If a value is missing, return an empty line."
+                                "You are an OCR engine.\n"
+                                "From this image, extract ONLY these two values:\n"
+                                "- Healing Speedup total duration\n"
+                                "- Universal Speedup total duration\n\n"
+                                "Return STRICTLY this JSON:\n"
+                                "{\n"
+                                "  \"healing\": \"<value>\",\n"
+                                "  \"universal\": \"<value>\"\n"
+                                "}\n\n"
+                                "Examples of values: \"11d 4h 40m\", \"3,476d 17h 56m\".\n"
+                                "Do NOT include explanations.\n"
+                                "Do NOT include <think>.\n"
+                                "Do NOT include any other text.\n"
+                                "If a value is missing, set it to \"0\"."
                             )
                         },
                         {
@@ -84,13 +88,16 @@ async def qwen_ocr(image_url: str) -> tuple[str, str] | None:
         )
 
         raw = completion.choices[0].message.content.strip()
-        print("🟢 OCR RAW OUTPUT:", raw)
+        print("🟢 RAW OCR:", raw)
 
-        lines = raw.splitlines()
-        healing = lines[0].strip() if len(lines) > 0 else ""
-        universal = lines[1].strip() if len(lines) > 1 else ""
-
-        return healing, universal
+        try:
+            data = json.loads(raw)
+            healing = data.get("healing", "0")
+            universal = data.get("universal", "0")
+            return healing, universal
+        except Exception as e:
+            print("❌ JSON parse failed:", repr(e))
+            return None
 
     except Exception as e:
         print("❌ OCR failed:", repr(e))
@@ -111,6 +118,42 @@ def find_row(sheet, username: str):
 
 def make_embed(description: str, color: discord.Color) -> discord.Embed:
     return discord.Embed(description=description, color=color)
+
+# ───────────────────────────────────────────────────────────────
+# PREFIX COMMANDS
+# ───────────────────────────────────────────────────────────────
+@client.event
+async def on_message(message):
+    global sleeping
+
+    if message.author.bot:
+        return
+
+    is_owner = message.author.id in OWNER_IDS
+    is_admin = message.author.guild_permissions.administrator if message.guild else False
+
+    if message.content.lower() == ",shutdown":
+        if is_owner:
+            sleeping = True
+            await message.channel.send("🔴 Bot has been shutdown!")
+        else:
+            await message.channel.send(embed=make_embed("❌ You don't have permission.", discord.Color.red()))
+
+    elif message.content.lower() == ",startup":
+        if is_owner:
+            sleeping = False
+            await message.channel.send("🟢 Bot is up and running again!")
+        else:
+            await message.channel.send(embed=make_embed("❌ You don't have permission.", discord.Color.red()))
+
+    elif message.content.lower() == ",status":
+        if is_owner or is_admin:
+            if sleeping:
+                await message.channel.send(embed=make_embed("🔴 Bot is under maintenance.", discord.Color.red()))
+            else:
+                await message.channel.send(embed=make_embed("🟢 Bot is online.", discord.Color.green()))
+        else:
+            await message.channel.send(embed=make_embed("❌ You don't have permission.", discord.Color.red()))
 
 # ───────────────────────────────────────────────────────────────
 # SPEEDUPS COMMAND — ONLY Healing + Universal
@@ -144,14 +187,12 @@ async def speedups(interaction: discord.Interaction, image: discord.Attachment):
 
     await interaction.response.defer(ephemeral=True)
 
-    result = await qwen_ocr(image.url)
+    result = await scout_ocr(image.url)
     if not result:
         await interaction.followup.send(embed=make_embed("❌ OCR failed.", discord.Color.red()), ephemeral=True)
         return
 
     healing, universal = result
-
-    # fallback if empty
     healing = healing or "0"
     universal = universal or "0"
 
