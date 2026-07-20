@@ -5,7 +5,7 @@ from google.oauth2.service_account import Credentials
 import json
 import os
 import re
-from groq import Groq
+import google.generativeai as genai
 
 CONFIG_FILE = "config.json"
 
@@ -35,8 +35,9 @@ gc          = gspread.authorize(creds)
 spreadsheet = gc.open_by_key(SPREADSHEET_ID)
 speedups_sheet  = spreadsheet.worksheet("Speedups")
 
-# Groq client
-groq_client = Groq(api_key=os.environ["GROQ_API_KEY"])
+# Gemini setup
+genai.configure(api_key=os.environ["GEMINI_API_KEY"])
+gemini_model = genai.GenerativeModel("gemini-1.5-flash")
 
 # Discord bot setup
 intents = discord.Intents.default()
@@ -47,83 +48,77 @@ tree   = app_commands.CommandTree(client)
 sleeping = False
 
 # ───────────────────────────────────────────────────────────────
-# Extract JSON safely even if Qwen outputs garbage
+# Fallback auto-detection (regex)
 # ───────────────────────────────────────────────────────────────
-def extract_json_block(text: str):
-    if not text:
-        return None
+def fallback_extract(text: str):
+    clean = text.replace("\n", " ").replace("\r", " ")
 
-    # Remove <think> blocks entirely
-    text = re.sub(r"<think>.*?</think>", "", text, flags=re.S)
+    heal_match = re.search(r"Healing Speedup\s*([0-9dhm ,]+)", clean, re.I)
+    healing = heal_match.group(1).strip() if heal_match else "0"
 
-    # Find first JSON object
-    match = re.search(r"\{.*?\}", text, flags=re.S)
-    if not match:
-        return None
+    uni_match = re.search(r"Universal Speedup\s*([0-9dhm ,]+)", clean, re.I)
+    universal = uni_match.group(1).strip() if uni_match else "0"
 
+    return healing, universal
+
+# ───────────────────────────────────────────────────────────────
+# Gemini OCR with JSON + fallback
+# ───────────────────────────────────────────────────────────────
+async def gemini_ocr(image: discord.Attachment):
     try:
-        return json.loads(match.group(0))
-    except:
-        return None
+        img_bytes = await image.read()
 
-# ───────────────────────────────────────────────────────────────
-# Qwen Vision OCR — strongest prompt
-# ───────────────────────────────────────────────────────────────
-async def qwen_ocr(image_url: str):
-    try:
-        completion = groq_client.chat.completions.create(
-            model="qwen/qwen3.6-27b",
-            messages=[
+        prompt = """
+        Extract ONLY the following two values from the image:
+
+        - Healing Speedup total duration
+        - Universal Speedup total duration
+
+        Return STRICT JSON ONLY:
+        {
+          "healing": "<value>",
+          "universal": "<value>"
+        }
+
+        No explanations.
+        No extra text.
+        No <think>.
+        If a value is missing, set it to "0".
+        """
+
+        response = gemini_model.generate_content(
+            [
+                prompt,
                 {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": (
-                                "You MUST behave as a STRICT OCR engine.\n"
-                                "You MUST NOT think.\n"
-                                "You MUST NOT explain.\n"
-                                "You MUST NOT describe.\n"
-                                "You MUST NOT summarize.\n"
-                                "You MUST NOT output <think>.\n"
-                                "You MUST NOT output anything except JSON.\n\n"
-                                "Extract ONLY these two values from the image:\n"
-                                "- Healing Speedup total duration\n"
-                                "- Universal Speedup total duration\n\n"
-                                "Return STRICT JSON ONLY:\n"
-                                "{\n"
-                                "  \"healing\": \"<value>\",\n"
-                                "  \"universal\": \"<value>\"\n"
-                                "}\n\n"
-                                "If a value is missing, set it to \"0\".\n"
-                                "If you output ANYTHING outside the JSON block, you FAIL."
-                            )
-                        },
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": image_url}
-                        }
-                    ]
+                    "mime_type": image.content_type,
+                    "data": img_bytes
                 }
-            ],
-            temperature=0,
-            max_completion_tokens=256
+            ]
         )
 
-        raw = completion.choices[0].message.content.strip()
-        print("🟢 RAW OCR:", raw)
+        raw = response.text.strip()
+        print("🟢 GEMINI RAW:", raw)
 
-        data = extract_json_block(raw)
-        if not data:
-            print("❌ JSON extraction failed")
-            return None
+        # Try JSON extraction
+        match = re.search(r"\{.*\}", raw, flags=re.S)
+        if match:
+            try:
+                data = json.loads(match.group(0))
+                healing = data.get("healing", "0")
+                universal = data.get("universal", "0")
 
-        healing = data.get("healing", "0")
-        universal = data.get("universal", "0")
+                if healing != "0" or universal != "0":
+                    return healing, universal
+            except:
+                pass
+
+        # JSON failed → fallback
+        print("⚠️ JSON failed → using fallback detection")
+        healing, universal = fallback_extract(raw)
         return healing, universal
 
     except Exception as e:
-        print("❌ OCR failed:", repr(e))
+        print("❌ Gemini OCR failed:", repr(e))
         return None
 
 # ───────────────────────────────────────────────────────────────
@@ -210,7 +205,7 @@ async def speedups(interaction: discord.Interaction, image: discord.Attachment):
 
     await interaction.response.defer(ephemeral=True)
 
-    result = await qwen_ocr(image.url)
+    result = await gemini_ocr(image)
     if not result:
         await interaction.followup.send(embed=make_embed("❌ OCR failed.", discord.Color.red()), ephemeral=True)
         return
