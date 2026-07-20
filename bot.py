@@ -6,9 +6,7 @@ from google.oauth2.service_account import Credentials
 import json
 import os
 import re
-import numpy as np
-import cv2
-import easyocr
+from groq import Groq
 
 CONFIG_FILE = "config.json"
 
@@ -26,7 +24,6 @@ def save_config(data):
 config = load_config()
 REPORT_CHANNEL_ID = config.get("report_channel_id")
 
-# ── CONFIG ──────────────────────────────────────────────────────────────────
 DISCORD_TOKEN   = os.environ.get("DISCORD_TOKEN") or os.environ.get("TOKEN")
 SPREADSHEET_ID  = os.environ.get("SPREADSHEET_ID")
 OWNER_IDS       = {1364018193580163194, 805304956633481260}
@@ -40,7 +37,10 @@ spreadsheet = gc.open_by_key(SPREADSHEET_ID)
 speedups_sheet  = spreadsheet.worksheet("Speedups")
 resources_sheet = spreadsheet.worksheet("Resources")
 
-# ── BOT SETUP ────────────────────────────────────────────────────────────────
+# Groq client
+groq_client = Groq(api_key=os.environ["GROQ_API_KEY"])
+
+# Discord bot setup
 intents = discord.Intents.default()
 intents.message_content = True
 client = discord.Client(intents=intents)
@@ -48,7 +48,41 @@ tree   = app_commands.CommandTree(client)
 
 sleeping = False
 
-# ── HELPERS ──────────────────────────────────────────────────────────────────
+# ───────────────────────────────────────────────────────────────
+# QWEN VISION OCR FUNCTION (BEST POSSIBLE OCR)
+# ───────────────────────────────────────────────────────────────
+async def qwen_ocr(image_url: str) -> str:
+    # Download image bytes
+    async with aiohttp.ClientSession() as session:
+        async with session.get(image_url) as resp:
+            img_bytes = await resp.read()
+
+    # Send to Groq Qwen Vision
+    response = groq_client.chat.completions.create(
+        model="qwen/qwen3.6-27b",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "Extract ALL text from this image. Return ONLY plain text."},
+                    {"type": "input_image", "image_url": "attachment://image"}
+                ]
+            }
+        ],
+        attachments=[
+            {
+                "name": "image",
+                "mime_type": "image/png",
+                "data": img_bytes
+            }
+        ]
+    )
+
+    return response.choices[0].message.content
+
+# ───────────────────────────────────────────────────────────────
+# HELPERS
+# ───────────────────────────────────────────────────────────────
 def strip_fancy(text: str) -> str:
     return re.sub(r'[^\x00-\x7F]+', '', text).strip()
 
@@ -70,27 +104,9 @@ def get_sheet_from_category(category: str):
     else:
         raise ValueError("Invalid category")
 
-# ── EASYOCR FUNCTION (WORKING ON RAILWAY) ─────────────────────────────────────
-async def easyocr_read(image_url: str) -> str:
-    # Download image
-    async with aiohttp.ClientSession() as session:
-        async with session.get(image_url) as resp:
-            content = await resp.read()
-
-    # Convert bytes → image array
-    img_array = np.frombuffer(content, np.uint8)
-    img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
-
-    # Initialize OCR engine
-    reader = easyocr.Reader(['en'], gpu=False)
-
-    # Run OCR
-    result = reader.readtext(img, detail=0)
-
-    # Join text lines
-    return "\n".join(result)
-
-# ── PREFIX COMMANDS ──────────────────────────────────────────────────────────
+# ───────────────────────────────────────────────────────────────
+# PREFIX COMMANDS
+# ───────────────────────────────────────────────────────────────
 @client.event
 async def on_message(message):
     global sleeping
@@ -106,25 +122,27 @@ async def on_message(message):
             sleeping = True
             await message.channel.send("🔴 Bot has been shutdown!")
         else:
-            await message.channel.send(embed=make_embed("❌ You don't have permission to do that.", discord.Color.red()))
+            await message.channel.send(embed=make_embed("❌ You don't have permission.", discord.Color.red()))
 
     elif message.content.lower() == ",startup":
         if is_owner:
             sleeping = False
             await message.channel.send("🟢 Bot is up and running again!")
         else:
-            await message.channel.send(embed=make_embed("❌ You don't have permission to do that.", discord.Color.red()))
+            await message.channel.send(embed=make_embed("❌ You don't have permission.", discord.Color.red()))
 
     elif message.content.lower() == ",status":
         if is_owner or is_admin:
             if sleeping:
-                await message.channel.send(embed=make_embed("🔴 Bot is currently under maintenance.", discord.Color.red()))
+                await message.channel.send(embed=make_embed("🔴 Bot is under maintenance.", discord.Color.red()))
             else:
-                await message.channel.send(embed=make_embed("🟢 Bot is online and running.", discord.Color.green()))
+                await message.channel.send(embed=make_embed("🟢 Bot is online.", discord.Color.green()))
         else:
-            await message.channel.send(embed=make_embed("❌ You don't have permission to do that.", discord.Color.red()))
+            await message.channel.send(embed=make_embed("❌ You don't have permission.", discord.Color.red()))
 
-# ── SPEEDUPS COMMAND ──────────────────────────────────────────────────────────
+# ───────────────────────────────────────────────────────────────
+# SPEEDUPS COMMAND
+# ───────────────────────────────────────────────────────────────
 @tree.command(name="speedups", description="Submit your ROK speedups screenshot")
 @app_commands.describe(image="Your ROK speedups screenshot")
 async def speedups(interaction: discord.Interaction, image: discord.Attachment):
@@ -133,21 +151,21 @@ async def speedups(interaction: discord.Interaction, image: discord.Attachment):
 
     if REPORT_CHANNEL_ID is None:
         await interaction.response.send_message(
-            embed=make_embed("⚠️ The report channel has not been set yet. An admin must run /setreportchannel.", discord.Color.yellow()),
+            embed=make_embed("⚠️ Report channel not set.", discord.Color.yellow()),
             ephemeral=True
         )
         return
 
     if interaction.channel_id != REPORT_CHANNEL_ID:
         await interaction.response.send_message(
-            embed=make_embed(f"❌ This command can only be used in <#{REPORT_CHANNEL_ID}>.", discord.Color.red()),
+            embed=make_embed(f"❌ Use this only in <#{REPORT_CHANNEL_ID}>.", discord.Color.red()),
             ephemeral=True
         )
         return
 
     if sleeping:
         await interaction.response.send_message(
-            embed=make_embed("❌ Bot is currently under maintenance.", discord.Color.red()),
+            embed=make_embed("❌ Bot under maintenance.", discord.Color.red()),
             ephemeral=True
         )
         return
@@ -155,7 +173,7 @@ async def speedups(interaction: discord.Interaction, image: discord.Attachment):
     await interaction.response.defer(ephemeral=True)
 
     try:
-        raw = await easyocr_read(image.url)
+        raw = await qwen_ocr(image.url)
     except Exception:
         await interaction.followup.send(embed=make_embed("❌ OCR failed.", discord.Color.red()), ephemeral=True)
         return
@@ -175,11 +193,13 @@ async def speedups(interaction: discord.Interaction, image: discord.Attachment):
             await interaction.followup.send(embed=make_embed("⚠️ Updated previous report.", discord.Color.yellow()), ephemeral=True)
         else:
             speedups_sheet.append_row(["", display_name, healing, universal])
-            await interaction.followup.send(embed=make_embed("✅ Your speedups report has been sent!", discord.Color.green()), ephemeral=True)
+            await interaction.followup.send(embed=make_embed("✅ Report submitted!", discord.Color.green()), ephemeral=True)
     except Exception:
-        await interaction.followup.send(embed=make_embed("❌ Failed to write to sheet.", discord.Color.red()), ephemeral=True)
+        await interaction.followup.send(embed=make_embed("❌ Sheet write failed.", discord.Color.red()), ephemeral=True)
 
-# ── RESOURCES COMMAND ─────────────────────────────────────────────────────────
+# ───────────────────────────────────────────────────────────────
+# RESOURCES COMMAND
+# ───────────────────────────────────────────────────────────────
 @tree.command(name="rss", description="Submit your ROK rss screenshot")
 @app_commands.describe(image="Your ROK resources screenshot")
 async def resources(interaction: discord.Interaction, image: discord.Attachment):
@@ -188,21 +208,21 @@ async def resources(interaction: discord.Interaction, image: discord.Attachment)
 
     if REPORT_CHANNEL_ID is None:
         await interaction.response.send_message(
-            embed=make_embed("⚠️ The report channel has not been set yet. An admin must run /setreportchannel.", discord.Color.yellow()),
+            embed=make_embed("⚠️ Report channel not set.", discord.Color.yellow()),
             ephemeral=True
         )
         return
 
     if interaction.channel_id != REPORT_CHANNEL_ID:
         await interaction.response.send_message(
-            embed=make_embed(f"❌ This command can only be used in <#{REPORT_CHANNEL_ID}>.", discord.Color.red()),
+            embed=make_embed(f"❌ Use this only in <#{REPORT_CHANNEL_ID}>.", discord.Color.red()),
             ephemeral=True
         )
         return
 
     if sleeping:
         await interaction.response.send_message(
-            embed=make_embed("❌ Bot is currently under maintenance.", discord.Color.red()),
+            embed=make_embed("❌ Bot under maintenance.", discord.Color.red()),
             ephemeral=True
         )
         return
@@ -210,7 +230,7 @@ async def resources(interaction: discord.Interaction, image: discord.Attachment)
     await interaction.response.defer(ephemeral=True)
 
     try:
-        raw = await easyocr_read(image.url)
+        raw = await qwen_ocr(image.url)
     except Exception:
         await interaction.followup.send(embed=make_embed("❌ OCR failed.", discord.Color.red()), ephemeral=True)
         return
@@ -234,92 +254,20 @@ async def resources(interaction: discord.Interaction, image: discord.Attachment)
             await interaction.followup.send(embed=make_embed("⚠️ Updated previous report.", discord.Color.yellow()), ephemeral=True)
         else:
             resources_sheet.append_row(["", display_name, food, wood, stone, gold])
-            await interaction.followup.send(embed=make_embed("✅ Your rss report has been sent!", discord.Color.green()), ephemeral=True)
+            await interaction.followup.send(embed=make_embed("✅ Report submitted!", discord.Color.green()), ephemeral=True)
     except Exception:
-        await interaction.followup.send(embed=make_embed("❌ Failed to write to sheet.", discord.Color.red()), ephemeral=True)
+        await interaction.followup.send(embed=make_embed("❌ Sheet write failed.", discord.Color.red()), ephemeral=True)
 
-# ── OWNER COMMANDS (unchanged) ───────────────────────────────────────────────
-@tree.command(name="addreport", description="Owner-only: Add a report for another user using an image")
-@app_commands.describe(
-    category="Choose report type",
-    user="Select the user to assign the report to",
-    image="Upload the screenshot"
-)
-@app_commands.choices(category=[
-    app_commands.Choice(name="Speedups", value="speedups"),
-    app_commands.Choice(name="RSS", value="rss")
-])
-async def addreport(interaction: discord.Interaction, category: app_commands.Choice[str], user: discord.Member, image: discord.Attachment):
-
-    if interaction.user.id not in OWNER_IDS:
-        await interaction.response.send_message(
-            embed=make_embed("❌ Only bot owners can use this command.", discord.Color.red()),
-            ephemeral=True
-        )
-        return
-
-    await interaction.response.defer(ephemeral=True)
-
-    try:
-        raw = await easyocr_read(image.url)
-    except Exception:
-        await interaction.followup.send(
-            embed=make_embed("❌ OCR failed.", discord.Color.red()),
-            ephemeral=True
-        )
-        return
-
-    if category.value == "speedups":
-        healing_match   = re.search(r"Healing[: ]+([0-9dhm ]+)", raw, re.I)
-        universal_match = re.search(r"Universal[: ]+([0-9dhm ]+)", raw, re.I)
-
-        healing   = healing_match.group(1).strip() if healing_match else "0"
-        universal = universal_match.group(1).strip() if universal_match else "0"
-
-        parsed = [healing, universal]
-    else:
-        food_match  = re.search(r"Food[: ]+([0-9,\.]+)", raw, re.I)
-        wood_match  = re.search(r"Wood[: ]+([0-9,\.]+)", raw, re.I)
-        stone_match = re.search(r"Stone[: ]+([0-9,\.]+)", raw, re.I)
-        gold_match  = re.search(r"Gold[: ]+([0-9,\.]+)", raw, re.I)
-
-        food  = food_match.group(1).strip() if food_match else "0"
-        wood  = wood_match.group(1).strip() if wood_match else "0"
-        stone = stone_match.group(1).strip() if stone_match else "0"
-        gold  = gold_match.group(1).strip() if gold_match else "0"
-
-        parsed = [food, wood, stone, gold]
-
-    sheet = get_sheet_from_category(category.value)
-    display_name = strip_fancy(user.display_name) or user.name
-
-    try:
-        if category.value == "speedups":
-            sheet.append_row(["", display_name, parsed[0], parsed[1]])
-        else:
-            sheet.append_row(["", display_name, parsed[0], parsed[1], parsed[2], parsed[3]])
-
-        await interaction.followup.send(
-            embed=make_embed(
-                f"✅ Added {category.name} report for **{display_name}**.",
-                discord.Color.green()
-            ),
-            ephemeral=True
-        )
-    except Exception:
-        await interaction.followup.send(
-            embed=make_embed("❌ Failed to write to sheet.", discord.Color.red()),
-            ephemeral=True
-        )
-
-# ── SET REPORT CHANNEL ───────────────────────────────────────────────────────
+# ───────────────────────────────────────────────────────────────
+# SET REPORT CHANNEL
+# ───────────────────────────────────────────────────────────────
 @tree.command(name="setreportchannel", description="Set the channel where /speedups and /rss are allowed")
-@app_commands.describe(channel="The channel to allow /speedups and /rss in")
+@app_commands.describe(channel="Channel to allow reports in")
 async def setreportchannel(interaction: discord.Interaction, channel: discord.TextChannel):
     global REPORT_CHANNEL_ID, config
 
     if not interaction.user.guild_permissions.administrator and interaction.user.id not in OWNER_IDS:
-        await interaction.response.send_message(embed=make_embed("❌ You don't have permission to use this command.", discord.Color.red()), ephemeral=True)
+        await interaction.response.send_message(embed=make_embed("❌ No permission.", discord.Color.red()), ephemeral=True)
         return
 
     REPORT_CHANNEL_ID = channel.id
@@ -327,11 +275,13 @@ async def setreportchannel(interaction: discord.Interaction, channel: discord.Te
     save_config(config)
 
     await interaction.response.send_message(
-        embed=make_embed(f"✅ /speedups and /rss are now restricted to <#{REPORT_CHANNEL_ID}>.", discord.Color.green()),
+        embed=make_embed(f"✅ Reports now restricted to <#{REPORT_CHANNEL_ID}>.", discord.Color.green()),
         ephemeral=True
     )
 
-# ── RUN ──────────────────────────────────────────────────────────────────────
+# ───────────────────────────────────────────────────────────────
+# RUN BOT
+# ───────────────────────────────────────────────────────────────
 @client.event
 async def on_ready():
     await tree.sync()
