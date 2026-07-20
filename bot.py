@@ -47,88 +47,53 @@ tree   = app_commands.CommandTree(client)
 sleeping = False
 
 # ───────────────────────────────────────────────────────────────
-# QWEN VISION OCR (STRONG PROMPT + FALLBACK + LOGGING)
+# QWEN OCR — ONLY extract Healing + Universal
 # ───────────────────────────────────────────────────────────────
-async def qwen_ocr(image_url: str) -> str | None:
+async def qwen_ocr(image_url: str) -> tuple[str, str] | None:
     try:
-        # Primary: Qwen Vision
-        try:
-            completion = groq_client.chat.completions.create(
-                model="qwen/qwen3.6-27b",
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": (
-                                    "Perform OCR on this image.\n"
-                                    "Return ONLY the raw text exactly as it appears.\n"
-                                    "Do NOT explain.\n"
-                                    "Do NOT describe.\n"
-                                    "Do NOT list.\n"
-                                    "Do NOT think.\n"
-                                    "Do NOT summarize.\n"
-                                    "Do NOT add formatting.\n"
-                                    "If you cannot detect text, return an empty string."
-                                )
-                            },
-                            {
-                                "type": "image_url",
-                                "image_url": {"url": image_url}
-                            }
-                        ]
-                    }
-                ],
-                temperature=0,
-                max_completion_tokens=512
-            )
-
-            print("🟢 Qwen OCR succeeded")
-            return completion.choices[0].message.content.strip()
-
-        except Exception as e:
-            print("⚠️ Qwen OCR failed:", repr(e))
-
-            # Fallback: Scout
-            try:
-                completion = groq_client.chat.completions.create(
-                    model="meta-llama/llama-4-scout-17b-16e-instruct",
-                    messages=[
+        completion = groq_client.chat.completions.create(
+            model="qwen/qwen3.6-27b",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
                         {
-                            "role": "user",
-                            "content": [
-                                {
-                                    "type": "text",
-                                    "text": (
-                                        "Perform OCR on this image.\n"
-                                        "Return ONLY raw text.\n"
-                                        "Do NOT explain.\n"
-                                        "Do NOT describe.\n"
-                                        "Do NOT list.\n"
-                                        "Do NOT think."
-                                    )
-                                },
-                                {
-                                    "type": "image_url",
-                                    "image_url": {"url": image_url}
-                                }
-                            ]
+                            "type": "text",
+                            "text": (
+                                "Extract ONLY the following two values from this image:\n\n"
+                                "1. Healing Speedup — return ONLY the duration number (example: 11d 4h 40m)\n"
+                                "2. Universal Speedup — return ONLY the duration number (example: 3,476d 17h 56m)\n\n"
+                                "Do NOT extract any other text.\n"
+                                "Do NOT describe the image.\n"
+                                "Do NOT list anything.\n"
+                                "Do NOT think.\n"
+                                "Do NOT summarize.\n"
+                                "Return ONLY the two raw values, each on its own line.\n"
+                                "If a value is missing, return an empty line."
+                            )
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": image_url}
                         }
-                    ],
-                    temperature=0,
-                    max_completion_tokens=512
-                )
+                    ]
+                }
+            ],
+            temperature=0,
+            max_completion_tokens=128
+        )
 
-                print("🟡 Fallback OCR succeeded using Scout")
-                return completion.choices[0].message.content.strip()
+        raw = completion.choices[0].message.content.strip()
+        print("🟢 OCR RAW OUTPUT:", raw)
 
-            except Exception as e2:
-                print("❌ Scout fallback also failed:", repr(e2))
-                return None
+        lines = raw.splitlines()
+        healing = lines[0].strip() if len(lines) > 0 else ""
+        universal = lines[1].strip() if len(lines) > 1 else ""
 
-    except Exception as outer:
-        print("❌ OCR outer failure:", repr(outer))
+        return healing, universal
+
+    except Exception as e:
+        print("❌ OCR failed:", repr(e))
         return None
 
 # ───────────────────────────────────────────────────────────────
@@ -148,43 +113,7 @@ def make_embed(description: str, color: discord.Color) -> discord.Embed:
     return discord.Embed(description=description, color=color)
 
 # ───────────────────────────────────────────────────────────────
-# PREFIX COMMANDS
-# ───────────────────────────────────────────────────────────────
-@client.event
-async def on_message(message):
-    global sleeping
-
-    if message.author.bot:
-        return
-
-    is_owner = message.author.id in OWNER_IDS
-    is_admin = message.author.guild_permissions.administrator if message.guild else False
-
-    if message.content.lower() == ",shutdown":
-        if is_owner:
-            sleeping = True
-            await message.channel.send("🔴 Bot has been shutdown!")
-        else:
-            await message.channel.send(embed=make_embed("❌ You don't have permission.", discord.Color.red()))
-
-    elif message.content.lower() == ",startup":
-        if is_owner:
-            sleeping = False
-            await message.channel.send("🟢 Bot is up and running again!")
-        else:
-            await message.channel.send(embed=make_embed("❌ You don't have permission.", discord.Color.red()))
-
-    elif message.content.lower() == ",status":
-        if is_owner or is_admin:
-            if sleeping:
-                await message.channel.send(embed=make_embed("🔴 Bot is under maintenance.", discord.Color.red()))
-            else:
-                await message.channel.send(embed=make_embed("🟢 Bot is online.", discord.Color.green()))
-        else:
-            await message.channel.send(embed=make_embed("❌ You don't have permission.", discord.Color.red()))
-
-# ───────────────────────────────────────────────────────────────
-# SPEEDUPS COMMAND (Healing + Universal only)
+# SPEEDUPS COMMAND — ONLY Healing + Universal
 # ───────────────────────────────────────────────────────────────
 @tree.command(name="speedups", description="Submit your ROK speedups screenshot")
 @app_commands.describe(image="Your ROK speedups screenshot")
@@ -215,19 +144,16 @@ async def speedups(interaction: discord.Interaction, image: discord.Attachment):
 
     await interaction.response.defer(ephemeral=True)
 
-    raw = await qwen_ocr(image.url)
-    print("🔍 OCR RAW OUTPUT:", raw)
-
-    if not raw:
+    result = await qwen_ocr(image.url)
+    if not result:
         await interaction.followup.send(embed=make_embed("❌ OCR failed.", discord.Color.red()), ephemeral=True)
         return
 
-    # NEW REGEX — matches label → newline → number
-    healing_match   = re.search(r"Healing Speedup\s*\n\s*([0-9dhm ,]+)", raw, re.I)
-    universal_match = re.search(r"Speedup\s*\n\s*([0-9dhm ,]+)", raw, re.I)
+    healing, universal = result
 
-    healing   = healing_match.group(1).strip() if healing_match else "0"
-    universal = universal_match.group(1).strip() if universal_match else "0"
+    # fallback if empty
+    healing = healing or "0"
+    universal = universal or "0"
 
     display_name = strip_fancy(interaction.user.display_name) or interaction.user.name
 
