@@ -6,8 +6,7 @@ import json
 import os
 import re
 
-# NEW GEMINI SDK
-from google.genai import Client, types
+from google.genai import Client
 
 CONFIG_FILE = "config.json"
 
@@ -63,7 +62,7 @@ def fallback_extract(text: str):
     return healing, universal
 
 # ───────────────────────────────────────────────────────────────
-# Gemini OCR with JSON + fallback (FIXED)
+# Gemini OCR with JSON + fallback (dict-based contents)
 # ───────────────────────────────────────────────────────────────
 async def gemini_ocr(image: discord.Attachment):
     try:
@@ -87,48 +86,43 @@ async def gemini_ocr(image: discord.Attachment):
         If a value is missing, set it to "0".
         """
 
-        # FIXED: Correct Gemini content format
         response = gemini.models.generate_content(
             model="gemini-1.5-flash",
             contents=[
-                types.Content(
-                    role="user",
-                    parts=[
-                        types.Part.from_text(prompt),
-                        types.Part.from_file_data(
-                            file_data=types.FileData(
-                                mime_type=image.content_type,
-                                data=img_bytes
-                            )
-                        )
-                    ]
-                )
-            ]
+                {
+                    "role": "user",
+                    "parts": [
+                        {"text": prompt},
+                        {
+                            "file_data": {
+                                "mime_type": image.content_type,
+                                "data": img_bytes,
+                            }
+                        },
+                    ],
+                }
+            ],
         )
 
-        # FIXED: Extract text from Gemini response
+        # Extract text from response
+        parts = response.candidates[0].content.parts
         raw = "".join(
-            part.text
-            for part in response.candidates[0].content.parts
-            if hasattr(part, "text") and part.text
+            getattr(p, "text", "") for p in parts if hasattr(p, "text") and p.text
         ).strip()
 
         print("🟢 GEMINI RAW:", raw)
 
-        # Try JSON extraction
         match = re.search(r"\{.*\}", raw, flags=re.S)
         if match:
             try:
                 data = json.loads(match.group(0))
                 healing = data.get("healing", "0")
                 universal = data.get("universal", "0")
-
                 if healing != "0" or universal != "0":
                     return healing, universal
             except:
                 pass
 
-        # Fallback auto-detection
         print("⚠️ JSON failed → using fallback detection")
         healing, universal = fallback_extract(raw)
         return healing, universal
