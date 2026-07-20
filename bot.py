@@ -222,8 +222,9 @@ async def speedups(interaction: discord.Interaction, image: discord.Attachment):
         await interaction.followup.send(embed=make_embed("❌ OCR failed.", discord.Color.red()), ephemeral=True)
         return
 
-    healing_match   = re.search(r"Healing Speedup\s+([0-9dhm ,]+)", raw, re.I)
-    universal_match = re.search(r"Speedup\s+([0-9dhm ,]+)", raw, re.I)
+    # NEW REGEX — matches label → newline → number
+    healing_match   = re.search(r"Healing Speedup\s*\n\s*([0-9dhm ,]+)", raw, re.I)
+    universal_match = re.search(r"Speedup\s*\n\s*([0-9dhm ,]+)", raw, re.I)
 
     healing   = healing_match.group(1).strip() if healing_match else "0"
     universal = universal_match.group(1).strip() if universal_match else "0"
