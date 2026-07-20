@@ -91,7 +91,8 @@ async def gemini_ocr(image: discord.Attachment):
         max_retries = 3
         for attempt in range(max_retries):
             try:
-                response = gemini.models.generate_content(
+                response = await asyncio.to_thread(
+                    gemini.models.generate_content,
                     model="gemini-3.5-flash",
                     contents=[
                         {
@@ -243,12 +244,12 @@ async def speedups(interaction: discord.Interaction, image: discord.Attachment):
     try:
         existing_row = find_row(speedups_sheet, display_name)
         if existing_row > -1:
-            result = speedups_sheet.update(f"B{existing_row}:D{existing_row}", [[display_name, healing, universal]])
+            result = speedups_sheet.update(range_name=f"B{existing_row}:D{existing_row}", values=[[display_name, healing, universal]])
             print(f"📍 Sheet UPDATE landed at: {result.get('updatedRange')}")
             await interaction.followup.send(embed=make_embed("⚠️ Updated previous report.", discord.Color.yellow()), ephemeral=True)
         else:
             next_row = len(speedups_sheet.col_values(2)) + 1
-            result = speedups_sheet.update(f"B{next_row}:D{next_row}", [[display_name, healing, universal]])
+            result = speedups_sheet.update(range_name=f"B{next_row}:D{next_row}", values=[[display_name, healing, universal]])
             print(f"📍 Sheet APPEND landed at: {result.get('updatedRange')}")
             await interaction.followup.send(embed=make_embed("✅ Report submitted!", discord.Color.green()), ephemeral=True)
     except Exception as e:
