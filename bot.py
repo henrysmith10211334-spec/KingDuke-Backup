@@ -69,12 +69,16 @@ def get_sheet_from_category(category: str):
     else:
         raise ValueError("Invalid category")
 
-# ── GOOGLE VISION OCR FUNCTION ───────────────────────────────────────────────
+# ── FIXED GOOGLE VISION OCR (DOWNLOAD FIRST) ─────────────────────────────────
 async def google_vision_ocr(image_url: str) -> str:
     client = vision.ImageAnnotatorClient(credentials=creds)
 
-    image = vision.Image()
-    image.source.image_uri = image_url
+    # Download image from Discord CDN
+    async with aiohttp.ClientSession() as session:
+        async with session.get(image_url) as resp:
+            content = await resp.read()
+
+    image = vision.Image(content=content)
 
     response = client.text_detection(image=image)
 
@@ -156,8 +160,8 @@ async def speedups(interaction: discord.Interaction, image: discord.Attachment):
         await interaction.followup.send(embed=make_embed("❌ OCR failed.", discord.Color.red()), ephemeral=True)
         return
 
-    healing_match   = re.search(r"Healing[: ]+([0-9dhm ]+)", raw, re.I)
-    universal_match = re.search(r"Universal[: ]+([0-9dhm ]+)", raw, re.I)
+    healing_match   = re.search(r"Healing[: ]+([0-9dhm ]]+)", raw, re.I)
+    universal_match = re.search(r"Universal[: ]+([0-9dhm ]]+)", raw, re.I)
 
     healing   = healing_match.group(1).strip() if healing_match else "0"
     universal = universal_match.group(1).strip() if universal_match else "0"
