@@ -229,10 +229,12 @@ async def speedups(interaction: discord.Interaction, image: discord.Attachment):
     try:
         existing_row = find_row(speedups_sheet, display_name)
         if existing_row > -1:
-            speedups_sheet.update(f"B{existing_row}:D{existing_row}", [[display_name, healing, universal]])
+            result = speedups_sheet.update(f"B{existing_row}:D{existing_row}", [[display_name, healing, universal]])
+            print(f"📍 Sheet UPDATE landed at: {result.get('updatedRange')}")
             await interaction.followup.send(embed=make_embed("⚠️ Updated previous report.", discord.Color.yellow()), ephemeral=True)
         else:
-            speedups_sheet.append_row(["", display_name, healing, universal])
+            result = speedups_sheet.append_row(["", display_name, healing, universal])
+            print(f"📍 Sheet APPEND landed at: {result['updates']['updatedRange']}")
             await interaction.followup.send(embed=make_embed("✅ Report submitted!", discord.Color.green()), ephemeral=True)
     except Exception as e:
         print("❌ Sheet write failed:", repr(e))
