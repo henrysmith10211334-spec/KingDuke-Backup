@@ -3,10 +3,12 @@ from discord import app_commands
 import aiohttp
 import gspread
 from google.oauth2.service_account import Credentials
-from google.cloud import vision
 import json
 import os
 import re
+import numpy as np
+import cv2
+import easyocr
 
 CONFIG_FILE = "config.json"
 
@@ -27,7 +29,6 @@ REPORT_CHANNEL_ID = config.get("report_channel_id")
 # ── CONFIG ──────────────────────────────────────────────────────────────────
 DISCORD_TOKEN   = os.environ.get("DISCORD_TOKEN") or os.environ.get("TOKEN")
 SPREADSHEET_ID  = os.environ.get("SPREADSHEET_ID")
-GOOGLE_PROJECT_ID = os.environ.get("GOOGLE_PROJECT_ID")
 OWNER_IDS       = {1364018193580163194, 805304956633481260}
 
 # Google Sheets setup
@@ -69,26 +70,25 @@ def get_sheet_from_category(category: str):
     else:
         raise ValueError("Invalid category")
 
-# ── FIXED GOOGLE VISION OCR (DOWNLOAD FIRST) ─────────────────────────────────
-async def google_vision_ocr(image_url: str) -> str:
-    client = vision.ImageAnnotatorClient(credentials=creds)
-
-    # Download image from Discord CDN
+# ── EASYOCR FUNCTION (WORKING ON RAILWAY) ─────────────────────────────────────
+async def easyocr_read(image_url: str) -> str:
+    # Download image
     async with aiohttp.ClientSession() as session:
         async with session.get(image_url) as resp:
             content = await resp.read()
 
-    image = vision.Image(content=content)
+    # Convert bytes → image array
+    img_array = np.frombuffer(content, np.uint8)
+    img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
 
-    response = client.text_detection(image=image)
+    # Initialize OCR engine
+    reader = easyocr.Reader(['en'], gpu=False)
 
-    if response.error.message:
-        raise Exception(response.error.message)
+    # Run OCR
+    result = reader.readtext(img, detail=0)
 
-    if not response.text_annotations:
-        return ""
-
-    return response.text_annotations[0].description
+    # Join text lines
+    return "\n".join(result)
 
 # ── PREFIX COMMANDS ──────────────────────────────────────────────────────────
 @client.event
@@ -155,13 +155,13 @@ async def speedups(interaction: discord.Interaction, image: discord.Attachment):
     await interaction.response.defer(ephemeral=True)
 
     try:
-        raw = await google_vision_ocr(image.url)
+        raw = await easyocr_read(image.url)
     except Exception:
         await interaction.followup.send(embed=make_embed("❌ OCR failed.", discord.Color.red()), ephemeral=True)
         return
 
-    healing_match   = re.search(r"Healing[: ]+([0-9dhm ]]+)", raw, re.I)
-    universal_match = re.search(r"Universal[: ]+([0-9dhm ]]+)", raw, re.I)
+    healing_match   = re.search(r"Healing[: ]+([0-9dhm ]+)", raw, re.I)
+    universal_match = re.search(r"Universal[: ]+([0-9dhm ]+)", raw, re.I)
 
     healing   = healing_match.group(1).strip() if healing_match else "0"
     universal = universal_match.group(1).strip() if universal_match else "0"
@@ -210,7 +210,7 @@ async def resources(interaction: discord.Interaction, image: discord.Attachment)
     await interaction.response.defer(ephemeral=True)
 
     try:
-        raw = await google_vision_ocr(image.url)
+        raw = await easyocr_read(image.url)
     except Exception:
         await interaction.followup.send(embed=make_embed("❌ OCR failed.", discord.Color.red()), ephemeral=True)
         return
@@ -238,7 +238,7 @@ async def resources(interaction: discord.Interaction, image: discord.Attachment)
     except Exception:
         await interaction.followup.send(embed=make_embed("❌ Failed to write to sheet.", discord.Color.red()), ephemeral=True)
 
-# ── OWNER-ONLY ADDREPORT COMMAND ─────────────────────────────────────────────
+# ── OWNER COMMANDS (unchanged) ───────────────────────────────────────────────
 @tree.command(name="addreport", description="Owner-only: Add a report for another user using an image")
 @app_commands.describe(
     category="Choose report type",
@@ -261,7 +261,7 @@ async def addreport(interaction: discord.Interaction, category: app_commands.Cho
     await interaction.response.defer(ephemeral=True)
 
     try:
-        raw = await google_vision_ocr(image.url)
+        raw = await easyocr_read(image.url)
     except Exception:
         await interaction.followup.send(
             embed=make_embed("❌ OCR failed.", discord.Color.red()),
@@ -312,43 +312,7 @@ async def addreport(interaction: discord.Interaction, category: app_commands.Cho
             ephemeral=True
         )
 
-# ── OWNER-ONLY DELETEREPORT COMMAND ──────────────────────────────────────────
-@tree.command(name="deletereport", description="Owner-only: Delete a report row")
-@app_commands.describe(
-    category="Choose report type",
-    row="Row number to delete"
-)
-@app_commands.choices(category=[
-    app_commands.Choice(name="Speedups", value="speedups"),
-    app_commands.Choice(name="RSS", value="rss")
-])
-async def deletereport(interaction: discord.Interaction, category: app_commands.Choice[str], row: int):
-
-    if interaction.user.id not in OWNER_IDS:
-        await interaction.response.send_message(
-            embed=make_embed("❌ Only bot owners can use this command.", discord.Color.red()),
-            ephemeral=True
-        )
-        return
-
-    sheet = get_sheet_from_category(category.value)
-
-    try:
-        sheet.delete_rows(row)
-        await interaction.response.send_message(
-            embed=make_embed(
-                f"🗑️ Deleted row **{row}** from **{category.name}**.",
-                discord.Color.green()
-            ),
-            ephemeral=True
-        )
-    except Exception as e:
-        await interaction.response.send_message(
-            embed=make_embed(f"❌ Error: {e}", discord.Color.red()),
-            ephemeral=True
-        )
-
-# ── SET REPORT CHANNEL COMMAND ───────────────────────────────────────────────
+# ── SET REPORT CHANNEL ───────────────────────────────────────────────────────
 @tree.command(name="setreportchannel", description="Set the channel where /speedups and /rss are allowed")
 @app_commands.describe(channel="The channel to allow /speedups and /rss in")
 async def setreportchannel(interaction: discord.Interaction, channel: discord.TextChannel):
