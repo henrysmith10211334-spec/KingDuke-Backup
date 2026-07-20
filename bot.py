@@ -48,7 +48,7 @@ tree   = app_commands.CommandTree(client)
 sleeping = False
 
 # ───────────────────────────────────────────────────────────────
-# QWEN VISION OCR (URL-based, correct SDK format, with logging)
+# QWEN VISION OCR (STRONG PROMPT + FALLBACK + LOGGING)
 # ───────────────────────────────────────────────────────────────
 async def qwen_ocr(image_url: str) -> str | None:
     try:
@@ -62,13 +62,16 @@ async def qwen_ocr(image_url: str) -> str | None:
                         "content": [
                             {
                                 "type": "text",
-                                "text": "Extract all visible text from this image. Return ONLY plain text."
+                                "text": (
+                                    "Perform OCR on this image. Extract ALL text exactly as it appears, "
+                                    "including numbers, labels, timers, and resource values. "
+                                    "Do NOT summarize. Do NOT describe the image. "
+                                    "Return ONLY the raw text you detect."
+                                )
                             },
                             {
                                 "type": "image_url",
-                                "image_url": {
-                                    "url": image_url
-                                }
+                                "image_url": {"url": image_url}
                             }
                         ]
                     }
@@ -93,13 +96,15 @@ async def qwen_ocr(image_url: str) -> str | None:
                             "content": [
                                 {
                                     "type": "text",
-                                    "text": "Extract all visible text from this image. Return ONLY plain text."
+                                    "text": (
+                                        "Perform OCR on this image. Extract ALL text exactly as it appears, "
+                                        "including numbers, labels, timers, and resource values. "
+                                        "Return ONLY raw text."
+                                    )
                                 },
                                 {
                                     "type": "image_url",
-                                    "image_url": {
-                                        "url": image_url
-                                    }
+                                    "image_url": {"url": image_url}
                                 }
                             ]
                         }
@@ -134,14 +139,6 @@ def find_row(sheet, username: str):
 
 def make_embed(description: str, color: discord.Color) -> discord.Embed:
     return discord.Embed(description=description, color=color)
-
-def get_sheet_from_category(category: str):
-    if category == "speedups":
-        return speedups_sheet
-    elif category == "rss":
-        return resources_sheet
-    else:
-        raise ValueError("Invalid category")
 
 # ───────────────────────────────────────────────────────────────
 # PREFIX COMMANDS
@@ -212,6 +209,8 @@ async def speedups(interaction: discord.Interaction, image: discord.Attachment):
     await interaction.response.defer(ephemeral=True)
 
     raw = await qwen_ocr(image.url)
+    print("🔍 OCR RAW OUTPUT:", raw)
+
     if raw is None:
         await interaction.followup.send(embed=make_embed("❌ OCR failed.", discord.Color.red()), ephemeral=True)
         return
@@ -269,6 +268,8 @@ async def resources(interaction: discord.Interaction, image: discord.Attachment)
     await interaction.response.defer(ephemeral=True)
 
     raw = await qwen_ocr(image.url)
+    print("🔍 OCR RAW OUTPUT:", raw)
+
     if raw is None:
         await interaction.followup.send(embed=make_embed("❌ OCR failed.", discord.Color.red()), ephemeral=True)
         return
