@@ -5,7 +5,7 @@ from google.oauth2.service_account import Credentials
 import json
 import os
 import re
-import google.generativeai as genai
+from google.genai import Client
 
 CONFIG_FILE = "config.json"
 
@@ -36,8 +36,7 @@ spreadsheet = gc.open_by_key(SPREADSHEET_ID)
 speedups_sheet  = spreadsheet.worksheet("Speedups")
 
 # Gemini setup
-genai.configure(api_key=os.environ["GEMINI_API_KEY"])
-gemini_model = genai.GenerativeModel("gemini-1.5-flash")
+gemini = Client(api_key=os.environ["GEMINI_API_KEY"])
 
 # Discord bot setup
 intents = discord.Intents.default()
@@ -86,8 +85,9 @@ async def gemini_ocr(image: discord.Attachment):
         If a value is missing, set it to "0".
         """
 
-        response = gemini_model.generate_content(
-            [
+        response = gemini.models.generate_content(
+            model="gemini-1.5-flash",
+            contents=[
                 prompt,
                 {
                     "mime_type": image.content_type,
@@ -112,7 +112,7 @@ async def gemini_ocr(image: discord.Attachment):
             except:
                 pass
 
-        # JSON failed → fallback
+        # Fallback auto-detection
         print("⚠️ JSON failed → using fallback detection")
         healing, universal = fallback_extract(raw)
         return healing, universal
