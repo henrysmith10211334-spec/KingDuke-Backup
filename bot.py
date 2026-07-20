@@ -47,12 +47,32 @@ tree   = app_commands.CommandTree(client)
 sleeping = False
 
 # ───────────────────────────────────────────────────────────────
-# JSON OCR — ONLY Healing + Universal (Scout)
+# Extract JSON safely even if Qwen outputs garbage
 # ───────────────────────────────────────────────────────────────
-async def scout_ocr(image_url: str):
+def extract_json_block(text: str):
+    if not text:
+        return None
+
+    # Remove <think> blocks entirely
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.S)
+
+    # Find first JSON object
+    match = re.search(r"\{.*?\}", text, flags=re.S)
+    if not match:
+        return None
+
+    try:
+        return json.loads(match.group(0))
+    except:
+        return None
+
+# ───────────────────────────────────────────────────────────────
+# Qwen Vision OCR — strongest prompt
+# ───────────────────────────────────────────────────────────────
+async def qwen_ocr(image_url: str):
     try:
         completion = groq_client.chat.completions.create(
-            model="meta-llama/llama-4-scout-17b-16e-instruct",
+            model="qwen/qwen3.6-27b",
             messages=[
                 {
                     "role": "user",
@@ -60,20 +80,23 @@ async def scout_ocr(image_url: str):
                         {
                             "type": "text",
                             "text": (
-                                "You are an OCR engine.\n"
-                                "From this image, extract ONLY these two values:\n"
+                                "You MUST behave as a STRICT OCR engine.\n"
+                                "You MUST NOT think.\n"
+                                "You MUST NOT explain.\n"
+                                "You MUST NOT describe.\n"
+                                "You MUST NOT summarize.\n"
+                                "You MUST NOT output <think>.\n"
+                                "You MUST NOT output anything except JSON.\n\n"
+                                "Extract ONLY these two values from the image:\n"
                                 "- Healing Speedup total duration\n"
                                 "- Universal Speedup total duration\n\n"
-                                "Return STRICTLY this JSON:\n"
+                                "Return STRICT JSON ONLY:\n"
                                 "{\n"
                                 "  \"healing\": \"<value>\",\n"
                                 "  \"universal\": \"<value>\"\n"
                                 "}\n\n"
-                                "Examples of values: \"11d 4h 40m\", \"3,476d 17h 56m\".\n"
-                                "Do NOT include explanations.\n"
-                                "Do NOT include <think>.\n"
-                                "Do NOT include any other text.\n"
-                                "If a value is missing, set it to \"0\"."
+                                "If a value is missing, set it to \"0\".\n"
+                                "If you output ANYTHING outside the JSON block, you FAIL."
                             )
                         },
                         {
@@ -84,27 +107,27 @@ async def scout_ocr(image_url: str):
                 }
             ],
             temperature=0,
-            max_completion_tokens=128
+            max_completion_tokens=256
         )
 
         raw = completion.choices[0].message.content.strip()
         print("🟢 RAW OCR:", raw)
 
-        try:
-            data = json.loads(raw)
-            healing = data.get("healing", "0")
-            universal = data.get("universal", "0")
-            return healing, universal
-        except Exception as e:
-            print("❌ JSON parse failed:", repr(e))
+        data = extract_json_block(raw)
+        if not data:
+            print("❌ JSON extraction failed")
             return None
+
+        healing = data.get("healing", "0")
+        universal = data.get("universal", "0")
+        return healing, universal
 
     except Exception as e:
         print("❌ OCR failed:", repr(e))
         return None
 
 # ───────────────────────────────────────────────────────────────
-# HELPERS
+# Helpers
 # ───────────────────────────────────────────────────────────────
 def strip_fancy(text: str) -> str:
     return re.sub(r'[^\x00-\x7F]+', '', text).strip()
@@ -120,7 +143,7 @@ def make_embed(description: str, color: discord.Color) -> discord.Embed:
     return discord.Embed(description=description, color=color)
 
 # ───────────────────────────────────────────────────────────────
-# PREFIX COMMANDS
+# Prefix commands
 # ───────────────────────────────────────────────────────────────
 @client.event
 async def on_message(message):
@@ -156,7 +179,7 @@ async def on_message(message):
             await message.channel.send(embed=make_embed("❌ You don't have permission.", discord.Color.red()))
 
 # ───────────────────────────────────────────────────────────────
-# SPEEDUPS COMMAND — ONLY Healing + Universal
+# Slash command: /speedups
 # ───────────────────────────────────────────────────────────────
 @tree.command(name="speedups", description="Submit your ROK speedups screenshot")
 @app_commands.describe(image="Your ROK speedups screenshot")
@@ -187,7 +210,7 @@ async def speedups(interaction: discord.Interaction, image: discord.Attachment):
 
     await interaction.response.defer(ephemeral=True)
 
-    result = await scout_ocr(image.url)
+    result = await qwen_ocr(image.url)
     if not result:
         await interaction.followup.send(embed=make_embed("❌ OCR failed.", discord.Color.red()), ephemeral=True)
         return
@@ -211,7 +234,7 @@ async def speedups(interaction: discord.Interaction, image: discord.Attachment):
         await interaction.followup.send(embed=make_embed("❌ Sheet write failed.", discord.Color.red()), ephemeral=True)
 
 # ───────────────────────────────────────────────────────────────
-# SET REPORT CHANNEL
+# Set report channel
 # ───────────────────────────────────────────────────────────────
 @tree.command(name="setreportchannel", description="Set the channel where /speedups is allowed")
 @app_commands.describe(channel="Channel to allow reports in")
@@ -232,7 +255,7 @@ async def setreportchannel(interaction: discord.Interaction, channel: discord.Te
     )
 
 # ───────────────────────────────────────────────────────────────
-# RUN BOT
+# Run bot
 # ───────────────────────────────────────────────────────────────
 @client.event
 async def on_ready():
