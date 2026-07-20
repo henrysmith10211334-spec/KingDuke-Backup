@@ -68,10 +68,10 @@ def get_sheet_from_category(category: str):
     else:
         raise ValueError("Invalid category")
 
-# ── FIXED OCR FUNCTION (CORRECT GROQ FORMAT) ─────────────────────────────────
+# ── FIXED OCR FUNCTION (NEW MODEL) ───────────────────────────────────────────
 async def groq_read_image(image_url: str, prompt: str) -> str:
     payload = {
-        "model": "llama-3.1-70b-versatile",
+        "model": "llama-3.2-vision-preview",
         "messages": [
             {
                 "role": "user",
@@ -105,7 +105,6 @@ async def groq_read_image(image_url: str, prompt: str) -> str:
 
             data = await resp.json()
 
-            # ⭐ DEBUG PRINT — shows in Railway logs
             print("GROQ RAW:", data)
 
             if "error" in data:
