@@ -3,6 +3,7 @@ from discord import app_commands
 import aiohttp
 import gspread
 from google.oauth2.service_account import Credentials
+from google.cloud import vision
 import json
 import os
 import re
@@ -25,8 +26,8 @@ REPORT_CHANNEL_ID = config.get("report_channel_id")
 
 # ── CONFIG ──────────────────────────────────────────────────────────────────
 DISCORD_TOKEN   = os.environ.get("DISCORD_TOKEN") or os.environ.get("TOKEN")
-OCRSPACE_API_KEY = os.environ.get("OCRSPACE_API_KEY")
 SPREADSHEET_ID  = os.environ.get("SPREADSHEET_ID")
+GOOGLE_PROJECT_ID = os.environ.get("GOOGLE_PROJECT_ID")
 OWNER_IDS       = {1364018193580163194, 805304956633481260}
 
 # Google Sheets setup
@@ -68,27 +69,22 @@ def get_sheet_from_category(category: str):
     else:
         raise ValueError("Invalid category")
 
-# ── OCRSPACE OCR FUNCTION ────────────────────────────────────────────────────
-async def ocrspace_read_image(image_url: str) -> str:
-    url = "https://api.ocr.space/parse/image"
+# ── GOOGLE VISION OCR FUNCTION ───────────────────────────────────────────────
+async def google_vision_ocr(image_url: str) -> str:
+    client = vision.ImageAnnotatorClient(credentials=creds)
 
-    payload = {
-        "apikey": OCRSPACE_API_KEY,
-        "url": image_url,
-        "OCREngine": 2,
-        "scale": True,
-        "isTable": False
-    }
+    image = vision.Image()
+    image.source.image_uri = image_url
 
-    async with aiohttp.ClientSession() as session:
-        async with session.post(url, data=payload) as resp:
-            data = await resp.json()
-            print("OCRSPACE RAW:", data)
+    response = client.text_detection(image=image)
 
-            if data.get("IsErroredOnProcessing"):
-                raise Exception(data.get("ErrorMessage", "Unknown OCR error"))
+    if response.error.message:
+        raise Exception(response.error.message)
 
-            return data["ParsedResults"][0]["ParsedText"]
+    if not response.text_annotations:
+        return ""
+
+    return response.text_annotations[0].description
 
 # ── PREFIX COMMANDS ──────────────────────────────────────────────────────────
 @client.event
@@ -155,7 +151,7 @@ async def speedups(interaction: discord.Interaction, image: discord.Attachment):
     await interaction.response.defer(ephemeral=True)
 
     try:
-        raw = await ocrspace_read_image(image.url)
+        raw = await google_vision_ocr(image.url)
     except Exception:
         await interaction.followup.send(embed=make_embed("❌ OCR failed.", discord.Color.red()), ephemeral=True)
         return
@@ -210,7 +206,7 @@ async def resources(interaction: discord.Interaction, image: discord.Attachment)
     await interaction.response.defer(ephemeral=True)
 
     try:
-        raw = await ocrspace_read_image(image.url)
+        raw = await google_vision_ocr(image.url)
     except Exception:
         await interaction.followup.send(embed=make_embed("❌ OCR failed.", discord.Color.red()), ephemeral=True)
         return
@@ -261,7 +257,7 @@ async def addreport(interaction: discord.Interaction, category: app_commands.Cho
     await interaction.response.defer(ephemeral=True)
 
     try:
-        raw = await ocrspace_read_image(image.url)
+        raw = await google_vision_ocr(image.url)
     except Exception:
         await interaction.followup.send(
             embed=make_embed("❌ OCR failed.", discord.Color.red()),
