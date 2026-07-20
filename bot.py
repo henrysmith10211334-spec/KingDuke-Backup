@@ -6,7 +6,6 @@ from google.oauth2.service_account import Credentials
 import json
 import os
 import re
-import base64
 
 CONFIG_FILE = "config.json"
 
@@ -69,16 +68,8 @@ def get_sheet_from_category(category: str):
     else:
         raise ValueError("Invalid category")
 
-# ── FIXED OCR FUNCTION + DEBUG PRINT ─────────────────────────────────────────
+# ── FIXED OCR FUNCTION (CORRECT GROQ FORMAT) ─────────────────────────────────
 async def groq_read_image(image_url: str, prompt: str) -> str:
-    # Download image bytes
-    async with aiohttp.ClientSession() as session:
-        async with session.get(image_url) as img_resp:
-            img_bytes = await img_resp.read()
-
-    # Convert to base64
-    img_b64 = base64.b64encode(img_bytes).decode("utf-8")
-
     payload = {
         "model": "llama-3.1-70b-versatile",
         "messages": [
@@ -86,12 +77,14 @@ async def groq_read_image(image_url: str, prompt: str) -> str:
                 "role": "user",
                 "content": [
                     {
-                        "type": "input_text",
+                        "type": "text",
                         "text": prompt
                     },
                     {
-                        "type": "input_image",
-                        "image": img_b64
+                        "type": "image_url",
+                        "image_url": {
+                            "url": image_url
+                        }
                     }
                 ]
             }
@@ -112,7 +105,7 @@ async def groq_read_image(image_url: str, prompt: str) -> str:
 
             data = await resp.json()
 
-            # ⭐ DEBUG PRINT — THIS SHOWS IN RAILWAY LOGS
+            # ⭐ DEBUG PRINT — shows in Railway logs
             print("GROQ RAW:", data)
 
             if "error" in data:
@@ -190,8 +183,7 @@ async def speedups(interaction: discord.Interaction, image: discord.Attachment):
     try:
         raw = await groq_read_image(
             image.url,
-            "From this ROK screenshot extract Healing and Universal speedup times. "
-            "Reply ONLY: HEALING:Xd Xh Xm UNIVERSAL:Xd Xh Xm"
+            "From this ROK screenshot extract Healing and Universal speedup times. Reply ONLY: HEALING:Xd Xh Xm UNIVERSAL:Xd Xh Xm"
         )
     except Exception:
         await interaction.followup.send(embed=make_embed("❌ Failed to send report, please try again or report to bot owner.", discord.Color.red()), ephemeral=True)
@@ -302,13 +294,11 @@ async def addreport(interaction: discord.Interaction, category: app_commands.Cho
 
     if category.value == "speedups":
         prompt = (
-            "Extract Healing and Universal speedup times. "
-            "Reply ONLY: HEALING:Xd Xh Xm UNIVERSAL:Xd Xh Xm"
+            "Extract Healing and Universal speedup times. Reply ONLY: HEALING:Xd Xh Xm UNIVERSAL:Xd Xh Xm"
         )
     else:
         prompt = (
-            "Extract FOOD, WOOD, STONE, GOLD. "
-            "Reply ONLY: FOOD:X WOOD:X STONE:X GOLD:X"
+            "Extract FOOD, WOOD, STONE, GOLD. Reply ONLY: FOOD:X WOOD:X STONE:X GOLD:X"
         )
 
     try:
