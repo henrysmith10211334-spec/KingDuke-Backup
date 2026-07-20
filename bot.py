@@ -87,7 +87,7 @@ async def gemini_ocr(image: discord.Attachment):
         """
  
         response = gemini.models.generate_content(
-            model="gemini-2.5-flash",
+            model="gemini-3.5-flash",
             contents=[
                 {
                     "role": "user",
