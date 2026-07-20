@@ -5,7 +5,9 @@ from google.oauth2.service_account import Credentials
 import json
 import os
 import re
-from google.genai import Client
+
+# NEW GEMINI SDK
+from google.genai import Client, types
 
 CONFIG_FILE = "config.json"
 
@@ -61,7 +63,7 @@ def fallback_extract(text: str):
     return healing, universal
 
 # ───────────────────────────────────────────────────────────────
-# Gemini OCR with JSON + fallback
+# Gemini OCR with JSON + fallback (FIXED)
 # ───────────────────────────────────────────────────────────────
 async def gemini_ocr(image: discord.Attachment):
     try:
@@ -85,18 +87,32 @@ async def gemini_ocr(image: discord.Attachment):
         If a value is missing, set it to "0".
         """
 
+        # FIXED: Correct Gemini content format
         response = gemini.models.generate_content(
             model="gemini-1.5-flash",
             contents=[
-                prompt,
-                {
-                    "mime_type": image.content_type,
-                    "data": img_bytes
-                }
+                types.Content(
+                    role="user",
+                    parts=[
+                        types.Part.from_text(prompt),
+                        types.Part.from_file_data(
+                            file_data=types.FileData(
+                                mime_type=image.content_type,
+                                data=img_bytes
+                            )
+                        )
+                    ]
+                )
             ]
         )
 
-        raw = response.text.strip()
+        # FIXED: Extract text from Gemini response
+        raw = "".join(
+            part.text
+            for part in response.candidates[0].content.parts
+            if hasattr(part, "text") and part.text
+        ).strip()
+
         print("🟢 GEMINI RAW:", raw)
 
         # Try JSON extraction
