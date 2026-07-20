@@ -68,10 +68,10 @@ def get_sheet_from_category(category: str):
     else:
         raise ValueError("Invalid category")
 
-# ── FIXED OCR FUNCTION (NEW MODEL) ───────────────────────────────────────────
+# ── FINAL OCR FUNCTION (llama-3.2-vision) ────────────────────────────────────
 async def groq_read_image(image_url: str, prompt: str) -> str:
     payload = {
-        "model": "llama-3.2-vision-preview",
+        "model": "llama-3.2-vision",
         "messages": [
             {
                 "role": "user",
